@@ -1,0 +1,430 @@
+use std::fs;
+use std::io::Write;
+use std::ops::{Deref, DerefMut};
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
+
+// TODO: Create a good high quality error system, instead of `panic` and `except`.
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Pos<'a> {
+    pub file: &'a str,
+    pub line: usize,
+    pub column: usize,
+    // pub char_column: usize,
+}
+
+#[derive(Debug)]
+pub struct Code<'a> {
+    pub pos: Pos<'a>,
+    pub code: String,
+    pub len: usize,
+}
+
+#[derive(Debug)]
+pub enum ScopeType {
+    Parentheses,
+    Braces,
+    Brackets,
+}
+
+#[derive(Debug)]
+pub enum TokenType {
+    Str(String),
+    Float(f64),
+    Int(i64),
+    Variable(String),
+    Open(ScopeType),
+    Close(ScopeType),
+    Endl,
+    AssignOp,
+}
+
+#[derive(Debug)]
+enum Operator {}
+
+#[derive(Debug)]
+pub struct Token<'a> {
+    pub code: Code<'a>,
+    pub ty: TokenType,
+}
+
+pub struct BaseTokenizerData<'a, It: Iterator<Item = char>> {
+    chars: It,
+    pos: Pos<'a>,
+    ch: Option<char>,
+    undo_flag: bool,
+}
+pub struct Tokenizer<'a, It: Iterator<Item = char>> {
+    base: BaseTokenizerData<'a, It>,
+    string_cache: String,
+}
+
+impl<'a> Pos<'a> {
+    #[inline]
+    pub fn new(file: &'a str) -> Self {
+        Self {
+            line: 1,
+            column: 1,
+            // char_column: 1,
+            file,
+        }
+    }
+
+    #[inline]
+    pub fn advance(&mut self) {
+        self.column += 1;
+        // self.char_column += 1;
+    }
+
+    #[inline]
+    pub fn advance_tab(&mut self) {
+        const TAB_WIDTH: usize = 4;
+        self.column += TAB_WIDTH - 1;
+        self.column -= self.column % TAB_WIDTH;
+        self.column += 1;
+
+        // self.char_column += 1;
+    }
+
+    #[inline]
+    pub fn advance_line(&mut self) {
+        self.line += 1;
+        self.column = 1;
+        // self.char_column = 1;
+    }
+
+    pub fn advance_by(&mut self, ch: char) {
+        if ch == '\n' {
+            self.advance_line();
+        } else if ch == '\t' {
+            self.advance_tab();
+        } else {
+            self.advance();
+        }
+    }
+
+    #[inline]
+    pub fn try_advance_by(&mut self, ch: Option<char>) {
+        if let Some(ch) = ch {
+            self.advance_by(ch);
+        }
+    }
+}
+
+impl TokenType {
+    pub fn try_get_scope(ch: char) -> Option<Self> {
+        match ch {
+            '(' => Some(TokenType::Open(ScopeType::Parentheses)),
+            '[' => Some(TokenType::Open(ScopeType::Brackets)),
+            '{' => Some(TokenType::Open(ScopeType::Braces)),
+            ')' => Some(TokenType::Close(ScopeType::Parentheses)),
+            ']' => Some(TokenType::Close(ScopeType::Brackets)),
+            '}' => Some(TokenType::Close(ScopeType::Braces)),
+            _ => None,
+        }
+    }
+}
+
+impl<'a, It: Iterator<Item = char>> BaseTokenizerData<'a, It> {
+    #[inline]
+    pub fn new(chars: It, file: &'a str) -> Self {
+        Self {
+            pos: Pos::new(file),
+            ch: None,
+            undo_flag: false,
+            chars,
+        }
+    }
+
+    fn process_name(&mut self, code: &mut Code, s: &mut String) {
+        while let Some(ch) = self.next_char() {
+            if Tokenizer::<It>::IGNORABLES.contains(&ch)
+                || Tokenizer::<It>::SPECIAL_CHARS.contains(&ch)
+                || Tokenizer::<It>::OPERATOR_CHARS.contains(&ch)
+            {
+                // Safe to do because `next_char` was called before.
+                self.undo().unwrap();
+                break;
+            }
+            s.push(ch);
+            code.push(ch);
+        }
+    }
+
+    fn next_char(&mut self) -> Option<char> {
+        if self.undo_flag {
+            self.undo_flag = false;
+        } else {
+            self.pos.try_advance_by(self.ch);
+            self.ch = self.chars.next();
+        }
+        self.ch
+    }
+
+    /// Undoes a `next_char` call.
+    /// Cannot be called twice in a row. If it does, it will return an error.
+    #[inline]
+    fn undo(&mut self) -> Result<(), ()> {
+        if self.undo_flag {
+            Err(())
+        } else {
+            self.undo_flag = true;
+            Ok(())
+        }
+    }
+}
+
+impl<'a, It: Iterator<Item = char>> Tokenizer<'a, It> {
+    const IGNORABLES: &'static [char] = &[' ', '\t', '\r'];
+    const SPECIAL_CHARS: &'static [char] = &[
+        '\n', ';', // endl
+        '(', '[', '{', '}', ']', ')', // brackets
+        '$', // variables
+        '\'', '"', // strings
+        '.', // floats, fields and methods
+        '#', // comments
+        ',', '\\', // future decision
+    ];
+    const OPERATOR_CHARS: &'static [char] = &['+', '-', '*', '/', '^', '&', '|', '<', '>', '='];
+
+    #[inline]
+    pub fn new(chars: It, file: &'a str) -> Self {
+        Self {
+            base: BaseTokenizerData::new(chars, file),
+            string_cache: String::new(),
+        }
+    }
+
+    #[inline]
+    fn process_name_cache(&mut self, code: &mut Code) -> &mut String {
+        self.base.process_name(code, &mut self.string_cache);
+        &mut self.string_cache
+    }
+}
+
+impl<'a, It: Iterator<Item = char>> Deref for Tokenizer<'a, It> {
+    type Target = BaseTokenizerData<'a, It>;
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl<'a, It: Iterator<Item = char>> DerefMut for Tokenizer<'a, It> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
+    }
+}
+
+impl<'a> Code<'a> {
+    pub fn new(pos: Pos<'a>) -> Self {
+        Self {
+            pos,
+            len: 0,
+            code: String::new(),
+        }
+    }
+
+    pub fn push(&mut self, ch: char) -> char {
+        self.len += 1;
+        self.code.push(ch);
+        ch
+    }
+
+    /// Undoes a `push` call.
+    pub fn pop(&mut self) -> Option<char> {
+        if self.len == 0 {
+            None
+        } else {
+            self.len -= 1;
+            self.code.pop()
+        }
+    }
+
+    pub fn display(&self) {
+        let file_str = fs::read_to_string(self.pos.file).unwrap();
+        let chars = file_str.lines().nth(self.pos.line - 1).unwrap().chars();
+
+        let mut pos = Pos::new(self.pos.file);
+        pos.line = self.pos.line;
+
+        let mut in_code = false;
+        let mut i = self.len;
+
+        let mut stdout = StandardStream::stdout(ColorChoice::Always);
+
+        for ch in chars.clone() {
+            if ch == '\t' {
+                let prev_column = pos.column;
+                pos.advance_tab();
+                for _ in prev_column..pos.column {
+                    write!(&mut stdout, " ").unwrap();
+                }
+            } else {
+                if self.pos.column == pos.column {
+                    in_code = true;
+                    stdout
+                        .set_color(ColorSpec::new().set_fg(Some(Color::Red)))
+                        .unwrap();
+                }
+                write!(&mut stdout, "{}", ch).unwrap();
+                if in_code {
+                    i -= 1;
+                    if i == 0 {
+                        in_code = false;
+                        stdout.set_color(&ColorSpec::new()).unwrap();
+                    }
+                }
+                pos.advance();
+            }
+        }
+        stdout.set_color(&ColorSpec::new()).unwrap();
+        writeln!(&mut stdout).unwrap();
+        for _ in 1..self.pos.column {
+            write!(&mut stdout, " ").unwrap();
+        }
+        for _ in 0..self.len {
+            write!(&mut stdout, "^").unwrap();
+        }
+        writeln!(&mut stdout).unwrap();
+    }
+}
+
+impl<'a, It: Iterator<Item = char>> Iterator for Tokenizer<'a, It> {
+    type Item = Token<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        while Self::IGNORABLES.contains(&self.next_char()?) {}
+
+        // It's okay to unwrap because `self.ch` was checked already.
+        let mut code = Code::new(self.pos);
+        let first_ch = code.push(self.ch.unwrap());
+        self.string_cache.clear();
+
+        match first_ch {
+            '$' => Some(Token {
+                ty: TokenType::Variable(self.process_name_cache(&mut code).clone()),
+                code,
+            }),
+            ';' | '\n' => Some(Token {
+                ty: TokenType::Endl,
+                code,
+            }),
+            '=' => Some(Token {
+                ty: TokenType::AssignOp,
+                code,
+            }),
+            '#' => {
+                while self.next_char().map_or(false, |ch| ch != '\n') {}
+                Some(Token {
+                    ty: TokenType::Endl,
+                    code,
+                })
+            }
+            '0'..='9' => {
+                // It's okay to unwrap the latest action in both structs was a push.
+                code.pop();
+                self.undo().unwrap();
+                self.process_name_cache(&mut code);
+                // TODO: Replace `.unwrap()` with an appropriate error message.
+                if let Some('.') = self.next_char() {
+                    code.push('.');
+                    self.string_cache.push('.');
+                    self.process_name_cache(&mut code);
+                    Some(Token {
+                        ty: TokenType::Float(self.string_cache.parse().unwrap()),
+                        code,
+                    })
+                } else {
+                    self.undo().unwrap();
+                    Some(Token {
+                        ty: TokenType::Int(if let Some(s) = self.string_cache.strip_prefix("0x") {
+                            i64::from_str_radix(s, 16).unwrap()
+                        } else if let Some(s) = self.string_cache.strip_prefix("0o") {
+                            i64::from_str_radix(s, 8).unwrap()
+                        } else if let Some(s) = self.string_cache.strip_prefix("0b") {
+                            i64::from_str_radix(s, 2).unwrap()
+                        } else {
+                            self.string_cache.parse().unwrap()
+                        }),
+                        code,
+                    })
+                }
+            }
+            '\\' => {
+                const ERR_MSG: &'static str = "Unexpected character `\\`";
+                while Self::IGNORABLES.contains(&self.next_char().expect(ERR_MSG)) {}
+                if let Some('\n') = self.ch {
+                    self.next()
+                } else {
+                    panic!("{}", ERR_MSG);
+                }
+            }
+            '\'' | '"' => {
+                let mut s = String::new();
+                loop {
+                    // TODO: Replace `.unwrap()` with an appropriate error message.
+                    let ch = code.push(self.next_char().unwrap());
+                    if ch == '\\' {
+                        let ch2 = code.push(self.next_char().unwrap());
+                        match ch2 {
+                            'n' => {
+                                s.push('\n');
+                            }
+                            't' => {
+                                s.push('\t');
+                            }
+                            'r' => {
+                                s.push('\r');
+                            }
+                            '\\' => {
+                                s.push('\\');
+                            }
+                            '\'' => {
+                                s.push('\'');
+                            }
+                            '"' => {
+                                s.push('"');
+                            }
+                            '0' => {
+                                s.push('\0');
+                            }
+                            'x' => {
+                                unimplemented!()
+                            }
+                            'u' => {
+                                unimplemented!()
+                            }
+                            _ => {
+                                panic!("The string escape `\\{}` doesn't exist.", ch2);
+                            }
+                        }
+                    } else if ch == first_ch {
+                        break;
+                    } else {
+                        s.push(ch);
+                    }
+                }
+                Some(Token {
+                    ty: TokenType::Str(s),
+                    code,
+                })
+            }
+            _ => Some(Token {
+                ty: TokenType::try_get_scope(first_ch).unwrap_or_else(|| {
+                    // It's okay to unwrap the latest action in both structs was a push.
+                    code.pop();
+                    self.undo().unwrap();
+                    TokenType::Str(self.process_name_cache(&mut code).clone())
+                }),
+                code,
+            }),
+        }
+    }
+}
+
+fn main() {
+    const FILE: &'static str = "./main.ks2";
+    for (i, token) in Tokenizer::new(fs::read_to_string(FILE).unwrap().chars(), FILE).enumerate() {
+        println!("{}: {:?}", i, token);
+        token.code.display();
+    }
+}
