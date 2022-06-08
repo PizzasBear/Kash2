@@ -269,13 +269,13 @@ fn main() -> io::Result<()> {
 
             let mut tokens = TokenTree::tokenize(path, &file);
             tokens.post_process();
-            tokens.tokens = tokens
-                .tokens
-                .into_iter()
-                .filter(|token| !matches!(token, TokenTree::NewLine(_)))
-                .collect();
+            // tokens.tokens = tokens
+            //     .tokens
+            //     .into_iter()
+            //     .filter(|token| !matches!(token, TokenTree::NewLine(_)))
+            //     .collect();
             println!("{:#?}", tokens);
-            println!("{:#?}", parser::parse_expr(&mut &*tokens.tokens));
+            println!("{:#?}", parser::pub_parse_expr(&mut &*tokens.tokens));
         }
         _ => {}
     }
