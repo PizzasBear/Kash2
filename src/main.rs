@@ -153,55 +153,93 @@ impl<'a> Span<'a> {
         }
     }
 
-    pub fn display(&self, lines: &[usize], s: &str) {
-        println!("Error at {}", ShowSpan { span: *self, lines });
-        let start_line = lines.binary_search(&self.start).unwrap_or_else(|err| err);
-        let end_line = lines
-            .binary_search(&(self.end - 1))
-            .unwrap_or_else(|err| err);
-
-        let start_line_start = start_line.checked_sub(1).map(|i| lines[i] + 1).unwrap_or(0);
-        if start_line == end_line {
-            println!(
-                "{} | {}{}{}",
-                start_line + 1,
-                &s.get(start_line_start..self.start).unwrap(),
-                s.get(self.start..self.end).unwrap().bold().red(),
-                &s.get(self.end..lines[end_line]).unwrap(),
+    pub fn display(self, lines: &[usize], s: &str) {
+        if self.start == self.end {
+            let line = lines.binary_search(&self.start).unwrap_or_else(|err| err);
+            print!(
+                "{} | {}",
+                line + 1,
+                s.get(line.checked_sub(1).map(|i| lines[i] + 1).unwrap_or(0)..self.start)
+                    .unwrap(),
             );
+            let (cursor_col, _) = crossterm::cursor::position().unwrap();
+            println!(
+                "{}",
+                s.get(self.end..lines.get(line).copied().unwrap_or(s.len()))
+                    .or_else(|| s.get(self.end..))
+                    .unwrap()
+            );
+            for _ in 0..cursor_col {
+                print!(" ");
+            }
+            println!("{}", "^".bold().red());
         } else {
-            println!(
-                "{} | {}{}",
-                start_line + 1,
-                &s.get(start_line_start..self.start).unwrap(),
-                &s.get(self.start..lines[start_line]).unwrap().bold().red(),
-            );
-            for line in start_line + 1..end_line {
+            // println!("Error at {}", ShowSpan { span: *self, lines });
+            let start_line = lines.binary_search(&self.start).unwrap_or_else(|err| err);
+            let end_line = lines
+                .binary_search(&(self.end - 1))
+                .unwrap_or_else(|err| err);
+
+            // println!("Span::display - self: {self}");
+            // println!(
+            //     "Span::display - lines: {}:{} {}:{}",
+            //     start_line + 1,
+            //     self.start + 1 - start_line.checked_sub(1).map(|i| lines[i] + 1).unwrap_or(0),
+            //     end_line + 1,
+            //     self.end - lines.get(end_line).copied().unwrap_or(s.len())
+            // );
+
+            let start_line_start = start_line.checked_sub(1).map(|i| lines[i] + 1).unwrap_or(0);
+            if start_line == end_line {
                 println!(
-                    "{} | {}",
-                    line + 1,
-                    &s.get(lines[line - 1] + 1..lines[line])
+                    "{} | {}{}{}",
+                    start_line + 1,
+                    s.get(start_line_start..self.start).unwrap(),
+                    s.get(self.start..self.end).unwrap().bold().red(),
+                    s.get(self.end..lines[end_line])
+                        .or_else(|| s.get(self.end..))
+                        .unwrap(),
+                );
+            } else {
+                println!(
+                    "{} | {}{}",
+                    start_line + 1,
+                    s.get(start_line_start..self.start).unwrap(),
+                    s.get(self.start..lines[start_line]).unwrap().bold().red(),
+                );
+                for line in start_line + 1..end_line {
+                    println!(
+                        "{} | {}",
+                        line + 1,
+                        s.get(lines[line - 1] + 1..lines[line])
+                            .unwrap()
+                            .bold()
+                            .red(),
+                    );
+                }
+                println!(
+                    "{} | {}{}",
+                    end_line + 1,
+                    s.get(lines[end_line - 1] + 1..self.end)
                         .unwrap()
                         .bold()
                         .red(),
+                    s.get(self.end..lines[end_line])
+                        .or_else(|| s.get(self.end..))
+                        .unwrap(),
                 );
             }
-            println!(
-                "{} | {}{}",
-                end_line + 1,
-                &s.get(lines[end_line - 1] + 1..self.end)
-                    .unwrap()
-                    .bold()
-                    .red(),
-                &s.get(self.end - 1..lines[end_line]).unwrap(),
-            );
         }
     }
 }
 
 impl<'a> fmt::Display for Span<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:[{}-{}]", self.path.display(), self.start, self.end)
+        if self.start == self.end {
+            write!(f, "{}:{}", self.path.display(), self.start)
+        } else {
+            write!(f, "{}:[{}-{}]", self.path.display(), self.start, self.end)
+        }
     }
 }
 
@@ -246,6 +284,12 @@ impl<'a> fmt::Display for ShowSpan<'a> {
     }
 }
 
+pub fn lines(s: &str) -> Vec<usize> {
+    s.char_indices()
+        .filter_map(|(i, ch)| if ch == '\n' { Some(i) } else { None })
+        .collect()
+}
+
 fn main() -> io::Result<()> {
     let matches = Command::new("Kash 2")
         .version("indev")
@@ -266,8 +310,19 @@ fn main() -> io::Result<()> {
             let file = fs::read_to_string(path)
                 .unwrap_or_else(|_| panic!("File `{}` not found", path.display()))
                 + "\n";
+            let file_lines = lines(&file);
+            println!("file: {file:?}");
+            println!("file_lines: {file_lines:?}");
 
-            let mut tokens = TokenTree::tokenize(path, &file);
+            let mut tokens = match TokenTree::tokenize(path, &file) {
+                Ok(tokens) => tokens,
+                Err(err) => {
+                    for span in err.spans() {
+                        span.display(&file_lines, &file);
+                    }
+                    panic!("{}", err);
+                }
+            };
             tokens.post_process();
             // tokens.tokens = tokens
             //     .tokens
@@ -275,7 +330,7 @@ fn main() -> io::Result<()> {
             //     .filter(|token| !matches!(token, TokenTree::NewLine(_)))
             //     .collect();
             println!("{:#?}", tokens);
-            println!("{:#?}", parser::pub_parse_expr(&mut &*tokens.tokens));
+            println!("{:#?}", parser::pub_parse_expr(&mut &*tokens.tokens, &file));
         }
         _ => {}
     }

@@ -1,5 +1,5 @@
 use crate::lexer::{self, TokenTree};
-use crate::Span;
+use crate::{lines, Span};
 use std::{error::Error, fmt, marker::PhantomData};
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
@@ -295,13 +295,36 @@ struct LeftoverPunct<'a, 'b> {
 #[derive(Debug)]
 pub enum ParseError<'a> {
     UnknownPrefixOp { op: String, span: Span<'a> },
+    UnexpectedPunct { punct: String, span: Span<'a> },
+    Expected { name: &'static str, span: Span<'a> },
+    NegativeTupleAccess { span: Span<'a> },
+}
+
+impl<'a> ParseError<'a> {
+    pub fn span(&self) -> Span<'a> {
+        match *self {
+            Self::UnknownPrefixOp { span, .. } => span,
+            Self::UnexpectedPunct { span, .. } => span,
+            Self::Expected { span, .. } => span,
+            Self::NegativeTupleAccess { span, .. } => span,
+        }
+    }
 }
 
 impl<'a> fmt::Display for ParseError<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::UnknownPrefixOp { ref op, span } => {
-                write!(f, "Unknown prefix operator `{op}` at {span}")
+                write!(f, "Unknown prefix operator `{op}` at '{span}'")
+            }
+            Self::UnexpectedPunct { ref punct, span } => {
+                write!(f, "Unexpected punctuation `{punct}` at '{span}'")
+            }
+            Self::Expected { ref name, span } => {
+                write!(f, "Expected {name} at '{span}'")
+            }
+            Self::NegativeTupleAccess { span } => {
+                write!(f, "Found negative tuple access at '{span}'")
             }
         }
     }
@@ -335,6 +358,7 @@ fn parse_val<'a, 'b>(
     tokens: &mut &'b [TokenTree<'a>],
     leftover_punct: Option<LeftoverPunct<'a, 'b>>,
 ) -> Result<(Expr<'a>, Option<LeftoverPunct<'a, 'b>>), ParseError<'a>> {
+    let tokens_span = tokens[0].span().union(tokens.last().unwrap().span());
     let initial_tokens = *tokens;
     let mut prefix_ops = vec![];
 
@@ -356,7 +380,7 @@ fn parse_val<'a, 'b>(
         if !leftover_punct_s.is_empty() {
             *tokens = initial_tokens;
             return Err(ParseError::UnknownPrefixOp {
-                op: String::from_utf8(leftover_punct_s.to_owned()).unwrap(),
+                op: String::from_utf8(leftover_punct_s.to_vec()).unwrap(),
                 span: Span {
                     start: span.start + punct.len() - leftover_punct_s.len(),
                     ..span
@@ -412,7 +436,13 @@ fn parse_val<'a, 'b>(
             }
             *tokens = &tokens[1..];
         } else {
-            panic!("Failed to find value")
+            return Err(ParseError::Expected {
+                name: "a value",
+                span: Span {
+                    start: tokens_span.end,
+                    ..tokens_span
+                },
+            });
         }
     }
 
@@ -450,7 +480,7 @@ fn parse_val<'a, 'b>(
                     span,
                 })
             } else if let Some(expr) = exprs.pop() {
-                assert!(exprs.is_empty());
+                debug_assert!(exprs.is_empty());
                 expr
             } else {
                 Expr::Tuple(Tuple {
@@ -467,7 +497,16 @@ fn parse_val<'a, 'b>(
             values: parse_expr_list(tokens)?.0,
             span,
         }),
-        _ => panic!("Bad value"),
+        ref token => {
+            let token_span = token.span();
+            return Err(ParseError::Expected {
+                name: "a value",
+                span: Span {
+                    end: token_span.start,
+                    ..token_span
+                },
+            });
+        }
     });
     *tokens = &tokens[1..];
 
@@ -533,10 +572,11 @@ fn parse_val<'a, 'b>(
                                     value: element,
                                     span: element_span,
                                 }) => {
-                                    assert!(
-                                        0 <= element,
-                                        "Negative tuple indices not supported at {element_span}"
-                                    );
+                                    if element < 0 {
+                                        return Err(ParseError::NegativeTupleAccess {
+                                            span: element_span,
+                                        });
+                                    }
                                     let expr = value.take().unwrap();
                                     let total_span = expr.span().union(element_span);
                                     value = Some(Expr::TupleAccess(TupleAccess {
@@ -602,8 +642,14 @@ fn parse_val<'a, 'b>(
     Ok((value.unwrap(), leftover_punct))
 }
 
-pub fn pub_parse_expr<'a>(tokens: &mut &[TokenTree<'a>]) -> Expr<'a> {
-    let (expr, leftover_punct) = parse_expr(tokens, None).expect("Failed to parse expr");
+pub fn pub_parse_expr<'a>(tokens: &mut &[TokenTree<'a>], file: &str) -> Expr<'a> {
+    let (expr, leftover_punct) = match parse_expr(tokens, None) {
+        Ok(out) => out,
+        Err(err) => {
+            err.span().display(&lines(file), file);
+            panic!("Failed to parse expression with error: {err}");
+        }
+    };
     assert!(leftover_punct.is_none());
     expr
 }
@@ -733,13 +779,13 @@ fn parse_expr<'a, 'b>(
         // println!("new value: {:#?}", values.last().unwrap());
     }
 
-    assert_eq!(values.len(), 1);
+    debug_assert_eq!(values.len(), 1);
     Ok((values.pop().unwrap(), leftover_punct))
 }
 
-fn parse_tupling_expr<'a, 'b>(
-    tokens: &mut &'b [TokenTree<'a>],
-    mut leftover_punct: Option<LeftoverPunct<'a, 'b>>,
+fn _parse_tupling_expr<'a, 'b>(
+    _tokens: &mut &'b [TokenTree<'a>],
+    mut _leftover_punct: Option<LeftoverPunct<'a, 'b>>,
 ) -> (Expr<'a>, Option<LeftoverPunct<'a, 'b>>) {
     todo!()
 }
@@ -764,7 +810,9 @@ pub fn parse_expr_list<'a>(
             break;
         }
 
-        let LeftoverPunct { punct, span } = leftover_punct.take().unwrap_or_else(|| {
+        let LeftoverPunct { punct, span } = if let Some(leftover_punct) = leftover_punct.take() {
+            leftover_punct
+        } else {
             let leftover_punct = match tokens[0] {
                 TokenTree::Punct7(lexer::Punct7 { ref punct, span }) => LeftoverPunct {
                     punct: punct.as_bytes(),
@@ -774,12 +822,29 @@ pub fn parse_expr_list<'a>(
                     punct: punct.as_bytes(),
                     span,
                 },
-                _ => panic!("expected `,` here"),
+                ref token => {
+                    let token_span = token.span();
+                    return Err(ParseError::Expected {
+                        name: "`,`",
+                        span: Span {
+                            end: token_span.start,
+                            ..token_span
+                        },
+                    });
+                }
             };
             tokens = &tokens[1..];
             leftover_punct
-        });
-        assert_eq!(punct[0], b',', "expected `,` here");
+        };
+        if punct[0] != b',' {
+            return Err(ParseError::Expected {
+                name: "`,`",
+                span: Span {
+                    end: span.start,
+                    ..span
+                },
+            });
+        }
         if 1 < punct.len() {
             leftover_punct = Some(LeftoverPunct {
                 punct: &punct[1..],
@@ -791,7 +856,12 @@ pub fn parse_expr_list<'a>(
         }
         has_comma = true;
     }
-    assert!(leftover_punct.is_none());
+    if let Some(LeftoverPunct { punct, span }) = leftover_punct {
+        return Err(ParseError::UnexpectedPunct {
+            punct: String::from_utf8(punct.to_vec()).unwrap(),
+            span,
+        });
+    }
 
     Ok((exprs, has_comma))
 }

@@ -1,5 +1,5 @@
-use crate::{Ascii7, Span};
-use std::path::Path;
+use crate::{lines, Ascii7, Span};
+use std::{error::Error, fmt, path::Path};
 
 // artemis fowl vs johan liebert
 
@@ -169,6 +169,130 @@ pub enum UngroupedToken<'a> {
     CloseGroup { delim: Delimiter, span: Span<'a> },
 }
 
+#[derive(Debug)]
+pub enum LexingError<'a> {
+    MissingOpenDelim {
+        span: Span<'a>,
+    },
+    MissingCloseDelim {
+        open_span: Span<'a>,
+        close_span: Span<'a>,
+    },
+    NonMatchingDelim {
+        open_span: Span<'a>,
+        close_span: Span<'a>,
+    },
+    UnsupportedNumberBase {
+        span: Span<'a>,
+        base: char,
+    },
+    NonDecimalFloat {
+        span: Span<'a>,
+        base: u8,
+    },
+    UnclosedString {
+        span: Span<'a>,
+    },
+    ParseIntError {
+        span: Span<'a>,
+        err: std::num::ParseIntError,
+    },
+    OutOfRangeAsciiEscape {
+        span: Span<'a>,
+    },
+    Expected {
+        span: Span<'a>,
+        s: &'static str,
+    },
+    InvalidUnicodeEscape {
+        span: Span<'a>,
+    },
+    UnsupportedEscapeChar {
+        span: Span<'a>,
+        ch: char,
+    },
+}
+
+impl<'a> LexingError<'a> {
+    pub fn spans(&self) -> Vec<Span<'a>> {
+        match *self {
+            Self::MissingOpenDelim { span } => vec![span],
+            Self::MissingCloseDelim {
+                open_span,
+                close_span,
+            } => vec![open_span, close_span],
+            Self::NonMatchingDelim {
+                open_span,
+                close_span,
+            } => vec![open_span, close_span],
+            Self::UnsupportedNumberBase { span, .. } => vec![span],
+            Self::NonDecimalFloat { span, .. } => vec![span],
+            Self::UnclosedString { span } => vec![span],
+            Self::ParseIntError { span, .. } => vec![span],
+            Self::OutOfRangeAsciiEscape { span } => vec![span],
+            Self::Expected { span, .. } => vec![span],
+            Self::InvalidUnicodeEscape { span } => vec![span],
+            Self::UnsupportedEscapeChar { span, .. } => vec![span],
+        }
+    }
+}
+
+impl<'a> fmt::Display for LexingError<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::MissingOpenDelim { span } => write!(
+                f,
+                "Found closing delimiter at {span} without a matching opening delimiter"
+            ),
+            Self::MissingCloseDelim {
+                open_span,
+                close_span,
+            } => write!(
+                f,
+                "Missing closing delimiter at {close_span} for opening at {open_span}"
+            ),
+            Self::NonMatchingDelim {
+                open_span,
+                close_span,
+            } => {
+                write!(
+                    f,
+                    "Non-matching delimiters at {open_span} and at {close_span}"
+                )
+            }
+            Self::UnsupportedNumberBase { span, base } => {
+                write!(f, "Unsupported number base `{base}` at {span}")
+            }
+            Self::NonDecimalFloat { span, base } => {
+                write!(f, "Non decimal float with base {base} at {span}")
+            }
+            Self::UnclosedString { span } => {
+                write!(f, "Unclosed string at {span}")
+            }
+            Self::ParseIntError { span, ref err } => {
+                write!(f, "Parse int error at {span}: {err}")
+            }
+            Self::OutOfRangeAsciiEscape { span } => {
+                write!(
+                    f,
+                    "Out of range hex escape at {span}, must be in range [\\x00-\\x7f]"
+                )
+            }
+            Self::Expected { span, s } => {
+                write!(f, "Expected `{s}` at {span}")
+            }
+            Self::InvalidUnicodeEscape { span } => {
+                write!(f, "Invalid unicode escape at {span}")
+            }
+            Self::UnsupportedEscapeChar { span, ch } => {
+                write!(f, "Unsupported string escape character `{ch}` at {span}")
+            }
+        }
+    }
+}
+
+impl<'a> Error for LexingError<'a> {}
+
 impl<'a> Group<'a> {
     pub fn post_process(&mut self) {
         let mut tokens = Vec::with_capacity(self.tokens.len());
@@ -235,7 +359,10 @@ impl<'a> TokenTree<'a> {
         }
     }
 
-    pub fn tokenize<P: AsRef<Path> + ?Sized>(path: &'a P, s: &str) -> Group<'a> {
+    pub fn tokenize<P: AsRef<Path> + ?Sized>(
+        path: &'a P,
+        s: &str,
+    ) -> Result<Group<'a>, LexingError<'a>> {
         let path = path.as_ref();
         let mut group = Group {
             delim: Delimiter::None,
@@ -244,16 +371,16 @@ impl<'a> TokenTree<'a> {
         };
 
         let mut i = 0;
-        while let Some(token) = Self::next_token(&mut i, path, s) {
+        while let Some(token) = Self::next_token(&mut i, path, s)? {
             match token {
                 UngroupedToken::OpenGroup { delim, span } => {
                     group
                         .tokens
-                        .push(Self::Group(Self::tokenize_rec(&mut i, span, s, delim)));
+                        .push(Self::Group(Self::tokenize_rec(&mut i, span, s, delim)?));
                 }
                 UngroupedToken::CloseGroup { span, .. } => {
-                    span.display(&lines(s), s);
-                    panic!("Found closing delimiter without a matching opening delimiter");
+                    // panic!("Found closing delimiter without a matching opening delimiter");
+                    return Err(LexingError::MissingOpenDelim { span });
                 }
                 UngroupedToken::NewLine(new_line) => {
                     group.tokens.push(Self::NewLine(new_line));
@@ -279,7 +406,7 @@ impl<'a> TokenTree<'a> {
             }
         }
 
-        group
+        Ok(group)
     }
 
     pub fn tokenize_rec(
@@ -287,7 +414,7 @@ impl<'a> TokenTree<'a> {
         open_span: Span<'a>,
         s: &str,
         delim: Delimiter,
-    ) -> Group<'a> {
+    ) -> Result<Group<'a>, LexingError<'a>> {
         let path = open_span.path;
 
         let mut group = Group {
@@ -296,23 +423,26 @@ impl<'a> TokenTree<'a> {
             span: open_span,
         };
 
-        while let Some(token) = Self::next_token(ptr, path, s) {
+        while let Some(token) = Self::next_token(ptr, path, s)? {
             match token {
                 UngroupedToken::OpenGroup { delim, span } => {
                     group
                         .tokens
-                        .push(Self::Group(Self::tokenize_rec(ptr, span, s, delim)));
+                        .push(Self::Group(Self::tokenize_rec(ptr, span, s, delim)?));
                 }
                 UngroupedToken::CloseGroup {
                     span,
                     delim: close_delim,
                 } => {
                     if delim != close_delim {
-                        span.display(&lines(s), s);
-                        panic!("Wrong non-matching delimiter found");
+                        // span.display(&lines(s), s);
+                        return Err(LexingError::NonMatchingDelim {
+                            open_span,
+                            close_span: span,
+                        });
                     }
                     group.span.end = span.end;
-                    return group;
+                    return Ok(group);
                 }
                 UngroupedToken::NewLine(new_line) => {
                     group.tokens.push(Self::NewLine(new_line));
@@ -338,11 +468,19 @@ impl<'a> TokenTree<'a> {
             }
         }
 
-        open_span.display(&lines(s), s);
-        panic!("Didn't find closing delimiter")
+        // open_span.display(&lines(s), s);
+        Err(LexingError::MissingCloseDelim {
+            open_span,
+            close_span: Span::new(path, s.len(), s.len()),
+        })
+        // panic!("Didn't find closing delimiter")
     }
 
-    fn next_num(ptr: &mut usize, path: &'a Path, s: &str) -> NumberLiteral<'a> {
+    fn next_num(
+        ptr: &mut usize,
+        path: &'a Path,
+        s: &str,
+    ) -> Result<NumberLiteral<'a>, LexingError<'a>> {
         let start = *ptr;
         let sign;
         (sign, *ptr) = match s.as_bytes()[start] {
@@ -359,23 +497,33 @@ impl<'a> TokenTree<'a> {
                 b'o' => 8,
                 b'b' => 2,
                 b'0'..=b'9' => 10,
-                ch if PUNCT_CHARS.contains(&ch) || SPECIAL_CHARS.contains(&ch) => {
+                ch if ch.is_ascii_whitespace()
+                    || PUNCT_CHARS.contains(&ch)
+                    || SPECIAL_CHARS.contains(&ch) =>
+                {
                     *ptr -= 1;
                     10
                 }
                 _ => {
-                    Span::new(
-                        path,
-                        post_sign_start + 1,
-                        s.get(post_sign_start + 1..)
+                    return Err(LexingError::UnsupportedNumberBase {
+                        span: Span::new(
+                            path,
+                            post_sign_start + 1,
+                            s.get(post_sign_start + 1..)
+                                .unwrap()
+                                .char_indices()
+                                .nth(1)
+                                .map(|(i, _)| post_sign_start + 1 + i)
+                                .unwrap(),
+                        ),
+                        base: s
+                            .get(post_sign_start + 1..)
                             .unwrap()
-                            .char_indices()
+                            .chars()
                             .nth(1)
-                            .map(|(i, _)| post_sign_start + 1 + i)
-                            .unwrap_or(s.len()),
-                    )
-                    .display(&lines(s), s);
-                    panic!("Unsupported number base");
+                            .unwrap(),
+                    });
+                    // panic!("Unsupported number base");
                 }
             }
         } else {
@@ -395,18 +543,21 @@ impl<'a> TokenTree<'a> {
         } {
             *ptr += 1;
             if radix != 10 {
-                Span::new(path, start, *ptr).display(&lines(s), s);
-                panic!("Non decimal floats not supported");
+                // panic!("Non decimal floats not supported");
+                return Err(LexingError::NonDecimalFloat {
+                    span: Span::new(path, start, *ptr),
+                    base: radix as _,
+                });
             }
             while s.as_bytes()[*ptr].is_ascii_digit() {
                 *ptr += 1;
             }
-            NumberLiteral::Float(FloatLiteral {
+            Ok(NumberLiteral::Float(FloatLiteral {
                 value: { s.get(start..*ptr).unwrap().parse().unwrap() },
                 span: Span::new(path, start, *ptr),
-            })
+            }))
         } else {
-            NumberLiteral::Int(IntLiteral {
+            Ok(NumberLiteral::Int(IntLiteral {
                 value: {
                     sign * i64::from_str_radix(
                         s.get(post_sign_start + if radix == 10 { 0 } else { 2 }..*ptr)
@@ -416,11 +567,11 @@ impl<'a> TokenTree<'a> {
                     .unwrap()
                 },
                 span: Span::new(path, start, *ptr),
-            })
+            }))
         }
     }
 
-    fn next_punct(ptr: &mut usize, path: &'a Path, s: &str) -> Punct<'a> {
+    fn next_punct(ptr: &mut usize, path: &'a Path, s: &str) -> Result<Punct<'a>, LexingError<'a>> {
         let start = *ptr;
         while PUNCT_CHARS.contains(&s.as_bytes()[*ptr]) {
             *ptr += 1;
@@ -431,25 +582,32 @@ impl<'a> TokenTree<'a> {
         //     std::str::from_utf8(&s.as_bytes()[start..*ptr]).unwrap(),
         // );
         if let Ok(s) = Ascii7::try_from(&s.as_bytes()[start..*ptr]) {
-            Punct::Ascii7(Punct7 { punct: s, span })
+            Ok(Punct::Ascii7(Punct7 { punct: s, span }))
         } else {
-            Punct::String(PunctString {
+            Ok(Punct::String(PunctString {
                 punct: std::str::from_utf8(&s.as_bytes()[start..*ptr])
                     .unwrap()
                     .to_owned(),
                 span,
-            })
+            }))
         }
     }
 
-    fn next_str(ptr: &mut usize, path: &'a Path, s: &str, tiny: bool) -> StrLiteral<'a> {
+    fn next_str(
+        ptr: &mut usize,
+        path: &'a Path,
+        s: &str,
+        tiny: bool,
+    ) -> Result<StrLiteral<'a>, LexingError<'a>> {
         let start = *ptr;
         let mut char_indices = s.get(start + 1..).unwrap().char_indices();
         let mut value = String::new();
 
         let unclosed_string = |end| {
-            Span::new(path, start, start + 1 + end).display(&lines(s), s);
-            panic!("Unclosed string");
+            // panic!("Unclosed string");
+            LexingError::UnclosedString {
+                span: Span::new(path, start, start + 1 + end),
+            }
         };
 
         let mut last_ch = s.as_bytes()[start + 1] as char;
@@ -457,13 +615,9 @@ impl<'a> TokenTree<'a> {
         loop {
             let (i, ch) = char_indices
                 .next()
-                .unwrap_or_else(|| unclosed_string(last_idx + last_ch.len_utf8()));
+                .ok_or_else(|| unclosed_string(last_idx + last_ch.len_utf8()))?;
             match ch {
-                '\\' => match char_indices
-                    .next()
-                    .unwrap_or_else(|| unclosed_string(i + 1))
-                    .1
-                {
+                '\\' => match char_indices.next().ok_or_else(|| unclosed_string(i + 1))?.1 {
                     '\\' => value.push('\\'),
                     ch if ch.is_whitespace() => value.push(ch),
                     '\'' => value.push('\''),
@@ -473,47 +627,57 @@ impl<'a> TokenTree<'a> {
                     'r' => value.push('\r'),
                     't' => value.push('\t'),
                     'x' => {
+                        let (j, ch2) = char_indices.next().ok_or_else(|| unclosed_string(i + 2))?;
                         let (j, ch2) = char_indices
                             .next()
-                            .unwrap_or_else(|| unclosed_string(i + 2));
-                        let (j, ch2) = char_indices
-                            .next()
-                            .unwrap_or_else(|| unclosed_string(j + ch2.len_utf8()));
+                            .ok_or_else(|| unclosed_string(j + ch2.len_utf8()))?;
                         let x = u8::from_str_radix(
                             s.get(start + i + 2..start + 1 + j + ch2.len_utf8())
                                 .unwrap(),
                             16,
                         )
-                        .unwrap_or_else(|err| {
-                            Span::new(path, start + i + 3, start + 1 + j + ch2.len_utf8())
-                                .display(&lines(s), s);
-                            panic!(
-                                "Invalid characters in numeric character escape (hex) ({})",
-                                err
-                            );
-                        });
+                        .map_err(|err| {
+                            LexingError::ParseIntError {
+                                span: Span::new(
+                                    path,
+                                    start + i + 3,
+                                    start + 1 + j + ch2.len_utf8(),
+                                ),
+                                err,
+                            }
+                            // panic!(
+                            //     "Invalid characters in numeric character escape (hex) ({})",
+                            //     err
+                            // );
+                        })?;
                         if 0x80 <= x {
-                            Span::new(path, start + i + 2, start + i + 4).display(&lines(s), s);
-                            panic!("Out of range hex escape, must be in range [\\x00-\\x7f]");
+                            // panic!("Out of range hex escape, must be in range [\\x00-\\x7f]");
+                            return Err(LexingError::OutOfRangeAsciiEscape {
+                                span: Span::new(path, start + i + 2, start + i + 4),
+                            });
                         }
                         value.push(x as _);
                     }
                     'u' => {
                         {
-                            let (j, ch2) = char_indices
-                                .next()
-                                .unwrap_or_else(|| unclosed_string(i + 2));
+                            let (j, ch2) =
+                                char_indices.next().ok_or_else(|| unclosed_string(i + 2))?;
                             if ch2 != '{' {
-                                Span::new(path, start + i + 3, start + 1 + j + ch2.len_utf8())
-                                    .display(&lines(s), s);
-                                panic!("Missing '{{' to start unicode escape");
+                                // panic!("Missing '{{' to start unicode escape");
+                                return Err(LexingError::Expected {
+                                    span: Span::new(
+                                        path,
+                                        start + i + 3,
+                                        start + 1 + j + ch2.len_utf8(),
+                                    ),
+                                    s: "{",
+                                });
                             }
                         }
                         let mut next_j = i + 3;
                         let j = loop {
-                            let (j, ch) = char_indices
-                                .next()
-                                .unwrap_or_else(|| unclosed_string(next_j));
+                            let (j, ch) =
+                                char_indices.next().ok_or_else(|| unclosed_string(next_j))?;
                             if ch == '}' {
                                 break j;
                             } else {
@@ -526,42 +690,47 @@ impl<'a> TokenTree<'a> {
                                     s.get(start + i + 4..start + 1 + j).unwrap(),
                                     16,
                                 )
-                                .unwrap_or_else(|err| {
-                                    Span::new(path, start + i + 4, start + 1 + j)
-                                        .display(&lines(s), s);
-                                    panic!("Invalid hex in unicode escape ({})", err);
-                                }),
+                                .map_err(|err| {
+                                    // panic!("Invalid hex in unicode escape ({})", err);
+                                    LexingError::ParseIntError {
+                                        span: Span::new(path, start + i + 4, start + 1 + j),
+                                        err,
+                                    }
+                                })?,
                             )
-                            .unwrap_or_else(|| {
-                                Span::new(path, start + i + 4, start + 1 + j).display(&lines(s), s);
-                                panic!("Invalid unicode escape");
-                            }),
+                            .ok_or_else(|| {
+                                // panic!("Invalid unicode escape");
+                                LexingError::InvalidUnicodeEscape {
+                                    span: Span::new(path, start + i + 4, start + 1 + j),
+                                }
+                            })?,
                         );
                     }
                     ch => {
-                        Span::new(
-                            path,
-                            start + i + 1,
-                            start + char_indices.next().map(|(i, _)| i).unwrap_or(s.len()),
-                        )
-                        .display(&lines(s), s);
-                        panic!("Bad escape character: '{}'", ch);
+                        // panic!("Bad escape character: '{}'", ch);
+                        return Err(LexingError::UnsupportedEscapeChar {
+                            span: Span::new(
+                                path,
+                                start + i + 1,
+                                start + char_indices.nth(1).map(|(i, _)| i).unwrap_or(s.len()),
+                            ),
+                            ch,
+                        });
                     }
                 },
                 '"' if !tiny => {
-                    println!("CLOSED STRING");
                     *ptr = start + 2 + i;
-                    return StrLiteral {
+                    return Ok(StrLiteral {
                         value,
                         span: Span::new(path, start, *ptr),
-                    };
+                    });
                 }
                 _ if tiny && ch.is_whitespace() => {
                     *ptr = start + 1 + i;
-                    return StrLiteral {
+                    return Ok(StrLiteral {
                         value,
                         span: Span::new(path, start, *ptr),
-                    };
+                    });
                 }
                 _ => value.push(ch),
             }
@@ -570,28 +739,41 @@ impl<'a> TokenTree<'a> {
         }
     }
 
-    fn next_ident(ptr: &mut usize, path: &'a Path, s: &str) -> Ident<'a> {
+    fn next_ident(ptr: &mut usize, path: &'a Path, s: &str) -> Result<Ident<'a>, LexingError<'a>> {
         let start = *ptr;
         let mut char_indices = s.get(start..).unwrap().char_indices();
         loop {
             let (i, ch) = char_indices.next().unwrap();
             if Self::is_stop_char(ch) {
                 *ptr = start + i;
-                return Ident {
+                return Ok(Ident {
                     name: s.get(start..*ptr).unwrap().to_owned(),
                     span: Span::new(path, start, *ptr),
-                };
+                });
             }
         }
     }
 
-    fn next_token(ptr: &mut usize, path: &'a Path, s: &str) -> Option<UngroupedToken<'a>> {
-        let mut char_indices = s.get(*ptr..)?.char_indices();
+    fn next_token(
+        ptr: &mut usize,
+        path: &'a Path,
+        s: &str,
+    ) -> Result<Option<UngroupedToken<'a>>, LexingError<'a>> {
+        let mut char_indices;
+        if let Some(s) = s.get(*ptr..) {
+            char_indices = s.char_indices();
+        } else {
+            return Ok(None);
+        };
 
         // Skips the whitespace
         let start = *ptr;
         let ch = loop {
-            let (i, ch) = char_indices.next()?;
+            let (i, ch) = if let Some(x) = char_indices.next() {
+                x
+            } else {
+                return Ok(None);
+            };
             if !ch.is_whitespace() || ch == '\n' {
                 *ptr = start + i;
                 break ch;
@@ -599,31 +781,45 @@ impl<'a> TokenTree<'a> {
         };
 
         match ch {
-            '0'..='9' => Some(match Self::next_num(ptr, path, s) {
+            '0'..='9' => Ok(Some(match Self::next_num(ptr, path, s)? {
                 NumberLiteral::Int(int_literal) => UngroupedToken::IntLiteral(int_literal),
                 NumberLiteral::Float(float_literal) => UngroupedToken::FloatLiteral(float_literal),
-            }),
-            '"' => Some(UngroupedToken::StrLiteral(Self::next_str(
+            })),
+            '"' => Ok(Some(UngroupedToken::StrLiteral(Self::next_str(
                 ptr, path, s, false,
-            ))),
-            '\'' => Some(UngroupedToken::StrLiteral(Self::next_str(
+            )?))),
+            '\'' => Ok(Some(UngroupedToken::StrLiteral(Self::next_str(
                 ptr, path, s, true,
-            ))),
+            )?))),
             '\n' => {
                 *ptr += 1;
-                Some(UngroupedToken::NewLine(NewLine {
+                Ok(Some(UngroupedToken::NewLine(NewLine {
                     span: Span::new(path, *ptr - 1, *ptr),
-                }))
+                })))
             }
             '#' => {
-                let (i, ch) = char_indices.next()?;
+                let (i, ch);
+                if let Some(x) = char_indices.next() {
+                    (i, ch) = x;
+                } else {
+                    return Ok(None);
+                };
                 match ch {
                     '(' => {
                         let mut depth = 1;
                         loop {
-                            match char_indices.next()?.1 {
+                            let ch = if let Some((_, ch)) = char_indices.next() {
+                                ch
+                            } else {
+                                return Ok(None);
+                            };
+                            match ch {
                                 ')' => {
-                                    let (i, ch) = char_indices.next()?;
+                                    let (i, ch) = if let Some(x) = char_indices.next() {
+                                        x
+                                    } else {
+                                        return Ok(None);
+                                    };
                                     if ch == '#' {
                                         depth -= 1;
                                         if depth == 0 {
@@ -632,7 +828,12 @@ impl<'a> TokenTree<'a> {
                                         }
                                     }
                                 }
-                                '#' if char_indices.next()?.1 == '(' => {
+                                '#' if (if let Some((_, ch)) = char_indices.next() {
+                                    ch == '('
+                                } else {
+                                    return Ok(None);
+                                }) =>
+                                {
                                     depth += 1;
                                 }
                                 _ => {}
@@ -641,48 +842,52 @@ impl<'a> TokenTree<'a> {
                     }
                     '\n' => {
                         *ptr = start + i + 1;
-                        Some(UngroupedToken::NewLine(NewLine {
+                        Ok(Some(UngroupedToken::NewLine(NewLine {
                             span: Span::new(path, *ptr - 1, *ptr),
-                        }))
+                        })))
                     }
                     _ => loop {
-                        let (i, ch) = char_indices.next()?;
+                        let (i, ch) = if let Some(x) = char_indices.next() {
+                            x
+                        } else {
+                            return Ok(None);
+                        };
                         if ch == '\n' {
                             *ptr = start + i + 1;
-                            break Some(UngroupedToken::NewLine(NewLine {
+                            break Ok(Some(UngroupedToken::NewLine(NewLine {
                                 span: Span::new(path, *ptr - 1, *ptr),
-                            }));
+                            })));
                         }
                     },
                 }
             }
             '-' | '+' if matches!(s.as_bytes()[*ptr + 1], b'0'..=b'9') => {
-                Some(match Self::next_num(ptr, path, s) {
+                Ok(Some(match Self::next_num(ptr, path, s)? {
                     NumberLiteral::Int(int_literal) => UngroupedToken::IntLiteral(int_literal),
                     NumberLiteral::Float(float_literal) => {
                         UngroupedToken::FloatLiteral(float_literal)
                     }
-                })
+                }))
             }
             ch if Delimiter::is_opening(ch) => {
                 *ptr += 1;
-                Some(UngroupedToken::OpenGroup {
+                Ok(Some(UngroupedToken::OpenGroup {
                     delim: ch.into(),
                     span: Span::new(path, *ptr - 1, *ptr),
-                })
+                }))
             }
             ch if Delimiter::is_closing(ch) => {
                 *ptr += 1;
-                Some(UngroupedToken::CloseGroup {
+                Ok(Some(UngroupedToken::CloseGroup {
                     delim: ch.into(),
                     span: Span::new(path, *ptr - 1, *ptr),
-                })
+                }))
             }
-            ch if PUNCT_CHARS.contains(&(ch as u8)) => match Self::next_punct(ptr, path, s) {
-                Punct::Ascii7(punct) => Some(UngroupedToken::Punct7(punct)),
-                Punct::String(punct) => Some(UngroupedToken::PunctString(punct)),
+            ch if PUNCT_CHARS.contains(&(ch as u8)) => match Self::next_punct(ptr, path, s)? {
+                Punct::Ascii7(punct) => Ok(Some(UngroupedToken::Punct7(punct))),
+                Punct::String(punct) => Ok(Some(UngroupedToken::PunctString(punct))),
             },
-            _ => Some(UngroupedToken::Ident(Self::next_ident(ptr, path, s))),
+            _ => Ok(Some(UngroupedToken::Ident(Self::next_ident(ptr, path, s)?))),
         }
     }
 
@@ -691,10 +896,4 @@ impl<'a> TokenTree<'a> {
             || PUNCT_CHARS.contains(&(ch as u8))
             || SPECIAL_CHARS.contains(&(ch as u8))
     }
-}
-
-pub fn lines(s: &str) -> Vec<usize> {
-    s.char_indices()
-        .filter_map(|(i, ch)| if ch == '\n' { Some(i) } else { None })
-        .collect()
 }
