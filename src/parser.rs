@@ -25,10 +25,43 @@ pub enum DuoOpType {
     Or = 0x90,
 }
 
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
+enum DuoOpLevelType {
+    LeftToRight,
+    RightToLeft,
+    RequireParens,
+}
+
 impl DuoOpType {
     #[inline]
     const fn level(self) -> u8 {
         self as u8 & 0xf0
+    }
+
+    #[inline]
+    fn level_type(self) -> DuoOpLevelType {
+        use DuoOpLevelType::*;
+        unsafe {
+            *[
+                LeftToRight,   // 0: **
+                LeftToRight,   // 1: * /
+                LeftToRight,   // 2: + -
+                LeftToRight,   // 3: >> <<
+                LeftToRight,   // 4: ^
+                LeftToRight,   // 5: &
+                LeftToRight,   // 6: |
+                RequireParens, // 7: < > <= >= == !=
+                LeftToRight,   // 8: &&
+                LeftToRight,   // 9: ||
+                LeftToRight,   // a:
+                LeftToRight,   // b:
+                LeftToRight,   // c:
+                LeftToRight,   // d:
+                LeftToRight,   // e:
+                LeftToRight,   // f:
+            ]
+            .get_unchecked(self as usize >> 4)
+        }
     }
 
     #[allow(dead_code)]
@@ -298,15 +331,17 @@ pub enum ParseError<'a> {
     UnexpectedPunct { punct: String, span: Span<'a> },
     Expected { name: &'static str, span: Span<'a> },
     NegativeTupleAccess { span: Span<'a> },
+    ChainedParenthesisOnly { span1: Span<'a>, span2: Span<'a> },
 }
 
 impl<'a> ParseError<'a> {
-    pub fn span(&self) -> Span<'a> {
+    pub fn spans(&self) -> Vec<Span<'a>> {
         match *self {
-            Self::UnknownPrefixOp { span, .. } => span,
-            Self::UnexpectedPunct { span, .. } => span,
-            Self::Expected { span, .. } => span,
-            Self::NegativeTupleAccess { span, .. } => span,
+            Self::UnknownPrefixOp { span, .. } => vec![span],
+            Self::UnexpectedPunct { span, .. } => vec![span],
+            Self::Expected { span, .. } => vec![span],
+            Self::NegativeTupleAccess { span, .. } => vec![span],
+            Self::ChainedParenthesisOnly { span1, span2 } => vec![span1, span2],
         }
     }
 }
@@ -325,6 +360,9 @@ impl<'a> fmt::Display for ParseError<'a> {
             }
             Self::NegativeTupleAccess { span } => {
                 write!(f, "Found negative tuple access at '{span}'")
+            }
+            Self::ChainedParenthesisOnly { span1, span2 } => {
+                write!(f, "Found chained operators that can't be chained at '{span1}' and '{span2}', add parentheses to fix it")
             }
         }
     }
@@ -365,12 +403,12 @@ fn parse_val<'a, 'b>(
     // Convert `leftover_puncts` into `prefix_ops`
     if let Some(LeftoverPunct { punct, mut span }) = leftover_punct {
         let leftover_punct_s = sep_puncts(punct, |s| {
-            let current_span = Span {
-                end: span.start + s.len(),
-                ..span
-            };
-            span.start = current_span.end;
             if let Some(ty) = UniOpType::try_prefix_buf(s) {
+                let current_span = Span {
+                    end: span.start + s.len(),
+                    ..span
+                };
+                span.start = current_span.end;
                 prefix_ops.push((ty, current_span));
                 SepSignal::Correct
             } else {
@@ -409,12 +447,12 @@ fn parse_val<'a, 'b>(
                         _ => unreachable!(),
                     };
                     let leftover_punct_s = sep_puncts(punct, |s| {
-                        let current_span = Span {
-                            end: span.start + s.len(),
-                            ..span
-                        };
-                        span.start = current_span.end;
                         if let Some(ty) = UniOpType::try_prefix_buf(s) {
+                            let current_span = Span {
+                                end: span.start + s.len(),
+                                ..span
+                            };
+                            span.start = current_span.end;
                             prefix_ops.push((ty, current_span));
                             SepSignal::Correct
                         } else {
@@ -532,12 +570,12 @@ fn parse_val<'a, 'b>(
                     };
 
                     match sep_puncts(&punct[..punct.len()], |s| {
-                        let current_span = Span {
-                            end: punct_span.start + s.len(),
-                            ..punct_span
-                        };
-                        punct_span.start = current_span.end;
                         if let Some(ty) = UniOpType::try_suffix_buf(s) {
+                            let current_span = Span {
+                                end: punct_span.start + s.len(),
+                                ..punct_span
+                            };
+                            punct_span.start = current_span.end;
                             let expr = value.take().unwrap();
                             let total_span = expr.span().union(current_span);
                             value = Some(Expr::UniOp(UniOp {
@@ -586,7 +624,12 @@ fn parse_val<'a, 'b>(
                                         total_span,
                                     }));
                                 }
-                                _ => todo!(),
+                                _ => {
+                                    return Err(ParseError::UnexpectedPunct {
+                                        punct: ".".to_owned(),
+                                        span: punct_span,
+                                    })
+                                }
                             }
                         }
                         leftover_punct_s => {
@@ -642,11 +685,17 @@ fn parse_val<'a, 'b>(
     Ok((value.unwrap(), leftover_punct))
 }
 
-pub fn pub_parse_expr<'a>(tokens: &mut &[TokenTree<'a>], file: &str) -> Expr<'a> {
+pub fn pub_parse_expr<'a>(
+    tokens: &mut &[TokenTree<'a>],
+    file: &str,
+    file_lines: &[usize],
+) -> Expr<'a> {
     let (expr, leftover_punct) = match parse_expr(tokens, None) {
         Ok(out) => out,
         Err(err) => {
-            err.span().display(&lines(file), file);
+            for span in err.spans() {
+                span.display(file_lines, file);
+            }
             panic!("Failed to parse expression with error: {err}");
         }
     };
@@ -739,7 +788,9 @@ fn parse_expr<'a, 'b>(
         };
         // println!("Add op: `{:?}`", current_op);
         while let Some(&(last_op, last_op_span)) = ops.last() {
-            if last_op.level() <= op.level() {
+            if last_op.level() < op.level()
+                || (last_op.level() == op.level() && op.level_type() == DuoOpLevelType::LeftToRight)
+            {
                 ops.pop().unwrap();
                 let right_expr = Box::new(values.pop().unwrap());
                 let left_expr = Box::new(values.pop().unwrap());
@@ -753,6 +804,13 @@ fn parse_expr<'a, 'b>(
                     total_span,
                 }));
                 // println!("new value: {:#?}", values.last().unwrap());
+            } else if last_op.level() == op.level()
+                && op.level_type() == DuoOpLevelType::RequireParens
+            {
+                return Err(ParseError::ChainedParenthesisOnly {
+                    span1: last_op_span,
+                    span2: op_span,
+                });
             } else {
                 break;
             }

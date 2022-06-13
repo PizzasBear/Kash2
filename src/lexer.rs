@@ -242,14 +242,14 @@ impl<'a> fmt::Display for LexingError<'a> {
         match *self {
             Self::MissingOpenDelim { span } => write!(
                 f,
-                "Found closing delimiter at {span} without a matching opening delimiter"
+                "Found closing delimiter at '{span}' without a matching opening delimiter"
             ),
             Self::MissingCloseDelim {
                 open_span,
                 close_span,
             } => write!(
                 f,
-                "Missing closing delimiter at {close_span} for opening at {open_span}"
+                "Missing closing delimiter at '{close_span}' for opening at '{open_span}'"
             ),
             Self::NonMatchingDelim {
                 open_span,
@@ -257,35 +257,35 @@ impl<'a> fmt::Display for LexingError<'a> {
             } => {
                 write!(
                     f,
-                    "Non-matching delimiters at {open_span} and at {close_span}"
+                    "Non-matching delimiters at '{open_span}' and at '{close_span}'"
                 )
             }
             Self::UnsupportedNumberBase { span, base } => {
-                write!(f, "Unsupported number base `{base}` at {span}")
+                write!(f, "Unsupported number base `{base}` at '{span}'")
             }
             Self::NonDecimalFloat { span, base } => {
-                write!(f, "Non decimal float with base {base} at {span}")
+                write!(f, "Non decimal float with base {base} at '{span}'")
             }
             Self::UnclosedString { span } => {
-                write!(f, "Unclosed string at {span}")
+                write!(f, "Unclosed string at '{span}'")
             }
             Self::ParseIntError { span, ref err } => {
-                write!(f, "Parse int error at {span}: {err}")
+                write!(f, "Parse int error at '{span}': {err}")
             }
             Self::OutOfRangeAsciiEscape { span } => {
                 write!(
                     f,
-                    "Out of range hex escape at {span}, must be in range [\\x00-\\x7f]"
+                    "Out of range hex escape at '{span}', must be in range [\\x00-\\x7f]"
                 )
             }
             Self::Expected { span, s } => {
-                write!(f, "Expected `{s}` at {span}")
+                write!(f, "Expected `{s}` at '{span}'")
             }
             Self::InvalidUnicodeEscape { span } => {
-                write!(f, "Invalid unicode escape at {span}")
+                write!(f, "Invalid unicode escape at '{span}'")
             }
             Self::UnsupportedEscapeChar { span, ch } => {
-                write!(f, "Unsupported string escape character `{ch}` at {span}")
+                write!(f, "Unsupported string escape character `{ch}` at '{span}'")
             }
         }
     }
@@ -490,6 +490,7 @@ impl<'a> TokenTree<'a> {
         };
         let post_sign_start = *ptr;
 
+        let mut underscore_sep = false;
         let radix = if s.as_bytes()[post_sign_start] == b'0' {
             *ptr += 2;
             match s.as_bytes()[post_sign_start + 1] {
@@ -497,6 +498,10 @@ impl<'a> TokenTree<'a> {
                 b'o' => 8,
                 b'b' => 2,
                 b'0'..=b'9' => 10,
+                b'_' => {
+                    underscore_sep = true;
+                    10
+                }
                 ch if ch.is_ascii_whitespace()
                     || PUNCT_CHARS.contains(&ch)
                     || SPECIAL_CHARS.contains(&ch) =>
@@ -520,7 +525,7 @@ impl<'a> TokenTree<'a> {
                             .get(post_sign_start + 1..)
                             .unwrap()
                             .chars()
-                            .nth(1)
+                            .next()
                             .unwrap(),
                     });
                     // panic!("Unsupported number base");
@@ -529,7 +534,13 @@ impl<'a> TokenTree<'a> {
         } else {
             10
         };
-        while s.as_bytes()[*ptr].is_ascii_digit() {
+        loop {
+            let ch = s.as_bytes()[*ptr];
+            if (ch != b'_' || underscore_sep) && char::is_digit(ch as _, radix) {
+                *ptr -= underscore_sep as usize;
+                break;
+            }
+            underscore_sep = ch == b'_';
             *ptr += 1;
         }
 
@@ -632,7 +643,7 @@ impl<'a> TokenTree<'a> {
                             .next()
                             .ok_or_else(|| unclosed_string(j + ch2.len_utf8()))?;
                         let x = u8::from_str_radix(
-                            s.get(start + i + 2..start + 1 + j + ch2.len_utf8())
+                            s.get(start + i + 3..start + 1 + j + ch2.len_utf8())
                                 .unwrap(),
                             16,
                         )
@@ -653,7 +664,7 @@ impl<'a> TokenTree<'a> {
                         if 0x80 <= x {
                             // panic!("Out of range hex escape, must be in range [\\x00-\\x7f]");
                             return Err(LexingError::OutOfRangeAsciiEscape {
-                                span: Span::new(path, start + i + 2, start + i + 4),
+                                span: Span::new(path, start + i + 3, start + i + 5),
                             });
                         }
                         value.push(x as _);

@@ -311,8 +311,8 @@ fn main() -> io::Result<()> {
                 .unwrap_or_else(|_| panic!("File `{}` not found", path.display()))
                 + "\n";
             let file_lines = lines(&file);
-            println!("file: {file:?}");
-            println!("file_lines: {file_lines:?}");
+            // println!("file: {file:?}");
+            // println!("file_lines: {file_lines:?}");
 
             let mut tokens = match TokenTree::tokenize(path, &file) {
                 Ok(tokens) => tokens,
@@ -324,13 +324,11 @@ fn main() -> io::Result<()> {
                 }
             };
             tokens.post_process();
-            // tokens.tokens = tokens
-            //     .tokens
-            //     .into_iter()
-            //     .filter(|token| !matches!(token, TokenTree::NewLine(_)))
-            //     .collect();
-            println!("{:#?}", tokens);
-            println!("{:#?}", parser::pub_parse_expr(&mut &*tokens.tokens, &file));
+            // println!("{:#?}", tokens);
+            println!(
+                "{:#?}",
+                parser::pub_parse_expr(&mut &*tokens.tokens, &file, &file_lines)
+            );
         }
         _ => {}
     }
