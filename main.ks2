@@ -1,0 +1,56 @@
+#(
+    trait Functor: Self[T: type] {
+        map[U: type](self, f: fn(T) U) Self[U]
+    }
+
+    type array[T: type, N: int] = ..range(N).map(fn(_): T),
+
+    impl Functor for list: Self[T: type] {
+        map[U: type](self, f: fn(T) U) Self[U] {
+            let mut out = []
+            for x in self {
+                out.push(x)
+            }
+            out
+        }
+    }
+
+    class Cls[A: int] {
+        const if A < 0 {
+        } else {
+        }
+    }
+
+    enum Option[T: type] {
+        Some(T)
+        None
+    }
+
+    impl Functor for Option: Self[T: type] {
+        map[U: type](self, f: fn(T) U) Self[U] {
+            match self {
+                Some(x) => {
+                    Some(f(x))
+                }
+                None
+            }
+        }
+    }
+
+    fn main() {
+        if check(): println("Hello World") else: println("Go Bye Bye")
+    }
+)#
+
+# "\xde"
+# a < i + j > k > (3) > 5
+
+# return if x < 0: 0 elif x < 1: x * x else: x
+{
+    a, b, = 1, 2,
+    if a < b {
+        println("a is the best")
+    } else {
+        println("The world is evil")
+    }
+}

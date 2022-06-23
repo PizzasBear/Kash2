@@ -1,135 +1,17 @@
+pub mod ascii;
+pub mod cache_hash;
 pub mod lexer;
 pub mod parser;
 
 use clap::{Arg, Command};
 use crossterm::style::Stylize;
 use lexer::TokenTree;
-use std::{fmt, fs, io, mem, ops, path::Path, ptr, str};
+use std::{fmt, fs, io, path::Path, str};
 // use crossterm::style::Stylize;
 // use std::io::{self, Write};
 // use std::mem;
 
 // artemis fowl vs johan liebert
-
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
-#[repr(C, align(8))]
-pub struct Ascii7 {
-    len: u8,
-    chars: [u8; 7],
-}
-
-impl Ascii7 {
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            len: 0,
-            chars: [0; 7],
-        }
-    }
-
-    #[inline]
-    pub fn len(self) -> usize {
-        self.len as _
-    }
-
-    pub fn push(&mut self, ch: u8) -> bool {
-        if self.len() < self.chars.len() && ch.is_ascii() {
-            self.chars[self.len()] = ch;
-            self.len += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn pop(&mut self) -> Option<u8> {
-        unsafe {
-            if self.len == 0 {
-                None
-            } else {
-                self.len -= 1;
-                Some(mem::replace(
-                    self.chars.get_unchecked_mut(self.len as usize),
-                    0,
-                ))
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Hash)]
-pub enum Ascii7ConversionError {
-    TooLong,
-    NotAscii,
-}
-
-impl fmt::Display for Ascii7ConversionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TooLong => write!(
-                f,
-                "Tried to convert a string longer than 7 characters to `Ascii7`"
-            ),
-            Self::NotAscii => write!(f, "Tried to convert a non ASCII string to `Ascii7`"),
-        }
-    }
-}
-
-impl fmt::Debug for Ascii7ConversionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", std::any::type_name::<Self>())?;
-        match self {
-            Self::TooLong => write!(f, "TooLong")?,
-            Self::NotAscii => write!(f, "NotAscii")?,
-        }
-        write!(f, " (\"{}\")", self)?;
-        Ok(())
-    }
-}
-
-impl std::error::Error for Ascii7ConversionError {}
-
-impl<'a> TryFrom<&'a [u8]> for Ascii7 {
-    type Error = Ascii7ConversionError;
-
-    fn try_from(s: &'a [u8]) -> Result<Self, Self::Error> {
-        if 7 < s.len() {
-            Err(Ascii7ConversionError::TooLong)
-        } else if !s.is_ascii() {
-            Err(Ascii7ConversionError::NotAscii)
-        } else {
-            let mut slf = Self::new();
-            unsafe {
-                ptr::copy_nonoverlapping(s.as_ptr(), slf.chars.as_mut_ptr(), s.len());
-            }
-            slf.len = s.len() as _;
-            Ok(slf)
-        }
-    }
-}
-
-impl ops::Deref for Ascii7 {
-    type Target = str;
-
-    #[inline]
-    fn deref(&self) -> &str {
-        unsafe { str::from_utf8_unchecked(&self.chars.get_unchecked(..self.len as usize)) }
-    }
-}
-
-impl fmt::Display for Ascii7 {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        <str as fmt::Display>::fmt(self, f)
-    }
-}
-
-impl fmt::Debug for Ascii7 {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        <str as fmt::Debug>::fmt(self, f)
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Span<'a> {
@@ -142,6 +24,22 @@ impl<'a> Span<'a> {
     #[inline]
     pub const fn new(path: &'a Path, start: usize, end: usize) -> Self {
         Self { path, start, end }
+    }
+
+    #[inline]
+    pub fn begining(self) -> Self {
+        Self {
+            end: self.start,
+            ..self
+        }
+    }
+
+    #[inline]
+    pub fn ending(self) -> Self {
+        Self {
+            start: self.end,
+            ..self
+        }
     }
 
     pub fn union(self, other: Self) -> Self {
@@ -324,7 +222,7 @@ fn main() -> io::Result<()> {
                 }
             };
             tokens.post_process();
-            // println!("{:#?}", tokens);
+            println!("{:#?}", tokens);
             println!(
                 "{:#?}",
                 parser::pub_parse_expr(&mut &*tokens.tokens, &file, &file_lines)

@@ -1,5 +1,5 @@
 use crate::lexer::{self, TokenTree};
-use crate::{lines, Span};
+use crate::Span;
 use std::{error::Error, fmt, marker::PhantomData};
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +28,7 @@ pub enum DuoOpType {
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 enum DuoOpLevelType {
     LeftToRight,
+    #[allow(dead_code)]
     RightToLeft,
     RequireParens,
 }
@@ -66,11 +67,41 @@ impl DuoOpType {
 
     #[allow(dead_code)]
     #[inline]
-    fn try_from(s: &str) -> Option<Self> {
+    fn try_from_str(s: &str) -> Option<Self> {
         Self::try_from_buf(s.as_bytes())
     }
 
-    fn try_from_buf(s: &[u8]) -> Option<Self> {
+    #[inline]
+    const fn max_len() -> usize {
+        2
+    }
+
+    fn try_from_tokens(tokens: &[TokenTree]) -> Option<Self> {
+        match tokens {
+            lexer::pat::puncts![b'*', b'*'] => Some(Self::Pow),
+            lexer::pat::puncts![b'*'] => Some(Self::Mul),
+            lexer::pat::puncts![b'/'] => Some(Self::Div),
+            lexer::pat::puncts![b'%'] => Some(Self::Mod),
+            lexer::pat::puncts![b'+'] => Some(Self::Add),
+            lexer::pat::puncts![b'-'] => Some(Self::Sub),
+            lexer::pat::puncts![b'>', b'>'] => Some(Self::Shr),
+            lexer::pat::puncts![b'<', b'<'] => Some(Self::Shl),
+            lexer::pat::puncts![b'^'] => Some(Self::BitXor),
+            lexer::pat::puncts![b'&'] => Some(Self::BitAnd),
+            lexer::pat::puncts![b'|'] => Some(Self::BitOr),
+            lexer::pat::puncts![b'<'] => Some(Self::Lt),
+            lexer::pat::puncts![b'>'] => Some(Self::Gt),
+            lexer::pat::puncts![b'<', b'='] => Some(Self::Le),
+            lexer::pat::puncts![b'>', b'='] => Some(Self::Ge),
+            lexer::pat::puncts![b'=', b'='] => Some(Self::Eq),
+            lexer::pat::puncts![b'!', b'='] => Some(Self::Neq),
+            lexer::pat::puncts![b'&', b'&'] => Some(Self::And),
+            lexer::pat::puncts![b'|', b'|'] => Some(Self::Or),
+            _ => None,
+        }
+    }
+
+    const fn try_from_buf(s: &[u8]) -> Option<Self> {
         match s {
             b"**" => Some(Self::Pow),
             b"*" => Some(Self::Mul),
@@ -107,8 +138,24 @@ pub enum UniOpType {
 
 impl UniOpType {
     #[inline]
-    fn try_prefix(s: &str) -> Option<Self> {
+    const fn max_num_tokens() -> usize {
+        2
+    }
+
+    #[inline]
+    fn try_prefix_str(s: &str) -> Option<Self> {
         Self::try_prefix_buf(s.as_bytes())
+    }
+
+    fn try_prefix_tokens(tokens: &[TokenTree]) -> Option<Self> {
+        match tokens {
+            lexer::pat::puncts![b'-'] => Some(Self::Neg),
+            lexer::pat::puncts![b'+'] => Some(Self::Pos),
+            lexer::pat::puncts![b'!'] => Some(Self::Not),
+            lexer::pat::puncts![b'&'] => Some(Self::Ref),
+            lexer::pat::puncts![b'*'] => Some(Self::Deref),
+            _ => None,
+        }
     }
 
     fn try_prefix_buf(s: &[u8]) -> Option<Self> {
@@ -124,8 +171,19 @@ impl UniOpType {
 
     #[allow(dead_code)]
     #[inline]
-    fn try_suffix(s: &str) -> Option<Self> {
+    fn try_suffix_str(s: &str) -> Option<Self> {
         Self::try_suffix_buf(s.as_bytes())
+    }
+
+    fn try_suffix_tokens(tokens: &[TokenTree]) -> Option<Self> {
+        match tokens {
+            lexer::pat::puncts![b'.', b'-'] => Some(Self::Neg),
+            lexer::pat::puncts![b'.', b'+'] => Some(Self::Pos),
+            lexer::pat::puncts![b'.', b'!'] => Some(Self::Not),
+            lexer::pat::puncts![b'.', b'&'] => Some(Self::Ref),
+            lexer::pat::puncts![b'.', b'*'] => Some(Self::Deref),
+            _ => None,
+        }
     }
 
     fn try_suffix_buf(s: &[u8]) -> Option<Self> {
@@ -224,9 +282,35 @@ pub struct Tuple<'a> {
 }
 
 #[derive(Debug)]
+pub struct SimpleIf<'a> {
+    pub cond: Expr<'a>,
+    pub then_block: Expr<'a>,
+}
+
+#[derive(Debug)]
+pub struct If<'a> {
+    pub ifs: Vec<SimpleIf<'a>>,
+    pub else_block: Option<Box<Expr<'a>>>,
+    pub span: Span<'a>,
+}
+
+#[derive(Debug)]
+pub struct Return<'a> {
+    pub span: Span<'a>,
+    pub expr: Box<Expr<'a>>,
+}
+
+#[derive(Debug)]
+pub struct Block<'a> {
+    pub stmts: Vec<Stmt<'a>>,
+    pub span: Span<'a>,
+}
+
 pub enum Expr<'a> {
+    Block(Block<'a>),
     DuoOp(DuoOp<'a>),
     UniOp(UniOp<'a>),
+
     Var(Var<'a>),
     Int(Int<'a>),
     Float(Float<'a>),
@@ -234,14 +318,42 @@ pub enum Expr<'a> {
     Bool(Bool<'a>),
     List(List<'a>),
     Tuple(Tuple<'a>),
+
     PropAccess(PropAccess<'a>),
     TupleAccess(TupleAccess<'a>),
     FnCall(FnCall<'a>),
+
+    If(If<'a>),
+    Return(Return<'a>),
+}
+
+impl<'a> fmt::Debug for Expr<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Expr::")?;
+        match self {
+            Self::Block(x) => fmt::Debug::fmt(x, f),
+            Self::UniOp(x) => fmt::Debug::fmt(x, f),
+            Self::DuoOp(x) => fmt::Debug::fmt(x, f),
+            Self::Var(x) => fmt::Debug::fmt(x, f),
+            Self::Int(x) => fmt::Debug::fmt(x, f),
+            Self::Float(x) => fmt::Debug::fmt(x, f),
+            Self::Str(x) => fmt::Debug::fmt(x, f),
+            Self::Bool(x) => fmt::Debug::fmt(x, f),
+            Self::List(x) => fmt::Debug::fmt(x, f),
+            Self::Tuple(x) => fmt::Debug::fmt(x, f),
+            Self::PropAccess(x) => fmt::Debug::fmt(x, f),
+            Self::TupleAccess(x) => fmt::Debug::fmt(x, f),
+            Self::FnCall(x) => fmt::Debug::fmt(x, f),
+            Self::If(x) => fmt::Debug::fmt(x, f),
+            Self::Return(x) => fmt::Debug::fmt(x, f),
+        }
+    }
 }
 
 impl<'a> Expr<'a> {
     pub fn span(&self) -> Span<'a> {
         match self {
+            Self::Block(block) => block.span,
             Self::DuoOp(duo_op) => duo_op.total_span,
             Self::UniOp(uni_op) => uni_op.total_span,
             Self::Var(var) => var.span,
@@ -254,22 +366,31 @@ impl<'a> Expr<'a> {
             Self::PropAccess(prop_access) => prop_access.total_span,
             Self::TupleAccess(tuple_access) => tuple_access.total_span,
             Self::FnCall(fn_call) => fn_call.total_span,
+            Self::If(if_expr) => if_expr.span,
+            Self::Return(return_expr) => return_expr.span,
         }
     }
 }
 
 #[derive(Debug)]
 pub struct Assign<'a> {
-    pub var: Var<'a>,
-    pub ty: Option<Expr<'a>>,
+    pub assigned: Vec<Expr<'a>>,
     pub value: Expr<'a>,
-    pub span: PhantomData<Span<'a>>,
+    pub span: Span<'a>,
 }
 
-#[derive(Debug)]
 pub enum Stmt<'a> {
-    Expr(Expr<'a>),
+    // Expr(Expr<'a>),
     Assign(Assign<'a>),
+}
+
+impl<'a> fmt::Debug for Stmt<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Stmt::")?;
+        match self {
+            Self::Assign(x) => fmt::Debug::fmt(x, f),
+        }
+    }
 }
 
 pub enum Module<'a> {
@@ -284,45 +405,58 @@ pub enum Module<'a> {
 // a = Span(path, start + i + 1, start + char_indices.next())
 // $ cargo run $()
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SepSignal {
-    LastCorrect,
+    FinalCorrect,
     Correct,
-    // LastIncorrect,
+    // FinalIncorrect,
     Incorrect,
 }
 
-fn sep_puncts<TryConvert: FnMut(&[u8]) -> SepSignal>(
-    mut punct_s: &[u8],
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SepOut {
+    NoTokens,
+    NoMatch,
+    FinalCorrect,
+    // FinalIncorrect,
+}
+
+fn result_sep<'a, Err, TryConvert: FnMut(&[TokenTree<'a>]) -> Result<SepSignal, Err>>(
+    tokens: &mut &[TokenTree<'a>],
+    max_len: usize,
     mut f: TryConvert,
-) -> &[u8] {
-    'outer_loop: while !punct_s.is_empty() {
-        let mut s = punct_s;
+) -> Result<SepOut, Err> {
+    while !tokens.is_empty() {
+        let mut sub_tokens = &tokens[..max_len.min(tokens.len())];
         loop {
-            if s.is_empty() {
-                break 'outer_loop;
+            if sub_tokens.is_empty() {
+                return Ok(SepOut::NoMatch);
             } else {
-                match f(s) {
-                    SepSignal::LastCorrect => {
-                        punct_s = &punct_s[s.len()..];
-                        break 'outer_loop;
+                match f(sub_tokens)? {
+                    SepSignal::FinalCorrect => {
+                        *tokens = &tokens[sub_tokens.len()..];
+                        return Ok(SepOut::FinalCorrect);
                     }
                     // SepSignal::LastIncorrect => {
+                    //     return Ok(true);
                     //     break 'outer_loop;
                     // }
                     SepSignal::Correct => break,
-                    SepSignal::Incorrect => s = &s[..s.len() - 1],
+                    SepSignal::Incorrect => sub_tokens = &sub_tokens[..sub_tokens.len() - 1],
                 }
             }
         }
-        punct_s = &punct_s[s.len()..];
+        *tokens = &tokens[sub_tokens.len()..];
     }
-    punct_s
+    Ok(SepOut::NoTokens)
 }
-
-#[derive(Debug)]
-struct LeftoverPunct<'a, 'b> {
-    punct: &'b [u8],
-    span: Span<'a>,
+#[inline]
+fn sep<'a, TryConvert: FnMut(&[TokenTree<'a>]) -> SepSignal>(
+    tokens: &mut &[TokenTree<'a>],
+    max_len: usize,
+    mut f: TryConvert,
+) {
+    result_sep::<(), _>(tokens, max_len, |tokens| Ok(f(tokens))).unwrap();
 }
 
 #[derive(Debug)]
@@ -332,6 +466,7 @@ pub enum ParseError<'a> {
     Expected { name: &'static str, span: Span<'a> },
     NegativeTupleAccess { span: Span<'a> },
     ChainedParenthesisOnly { span1: Span<'a>, span2: Span<'a> },
+    InvalidLeftHandOfAssignment { span: Span<'a> },
 }
 
 impl<'a> ParseError<'a> {
@@ -342,6 +477,7 @@ impl<'a> ParseError<'a> {
             Self::Expected { span, .. } => vec![span],
             Self::NegativeTupleAccess { span, .. } => vec![span],
             Self::ChainedParenthesisOnly { span1, span2 } => vec![span1, span2],
+            Self::InvalidLeftHandOfAssignment { span } => vec![span],
         }
     }
 }
@@ -363,6 +499,9 @@ impl<'a> fmt::Display for ParseError<'a> {
             }
             Self::ChainedParenthesisOnly { span1, span2 } => {
                 write!(f, "Found chained operators that can't be chained at '{span1}' and '{span2}', add parentheses to fix it")
+            }
+            Self::InvalidLeftHandOfAssignment { span } => {
+                write!(f, "Invalid left-hand side of assignment at '{span}'")
             }
         }
     }
@@ -392,117 +531,147 @@ impl<'a> Error for ParseError<'a> {}
 ///     },
 /// }
 /// ```
-fn parse_val<'a, 'b>(
-    tokens: &mut &'b [TokenTree<'a>],
-    leftover_punct: Option<LeftoverPunct<'a, 'b>>,
-) -> Result<(Expr<'a>, Option<LeftoverPunct<'a, 'b>>), ParseError<'a>> {
-    let tokens_span = tokens[0].span().union(tokens.last().unwrap().span());
-    let initial_tokens = *tokens;
+fn parse_val<'a, 'b>(tokens: &mut &'b [TokenTree<'a>]) -> Result<Expr<'a>, ParseError<'a>> {
+    let mut inner_tokens = *tokens;
+    // let tokens_span = tokens[0].span().union(tokens.last().unwrap().span());
     let mut prefix_ops = vec![];
 
-    // Convert `leftover_puncts` into `prefix_ops`
-    if let Some(LeftoverPunct { punct, mut span }) = leftover_punct {
-        let leftover_punct_s = sep_puncts(punct, |s| {
-            if let Some(ty) = UniOpType::try_prefix_buf(s) {
-                let current_span = Span {
-                    end: span.start + s.len(),
-                    ..span
-                };
-                span.start = current_span.end;
-                prefix_ops.push((ty, current_span));
-                SepSignal::Correct
-            } else {
-                SepSignal::Incorrect
-            }
-        });
-        if !leftover_punct_s.is_empty() {
-            *tokens = initial_tokens;
-            return Err(ParseError::UnknownPrefixOp {
-                op: String::from_utf8(leftover_punct_s.to_vec()).unwrap(),
-                span: Span {
-                    start: span.start + punct.len() - leftover_punct_s.len(),
-                    ..span
-                },
-            });
-        }
-    }
     // Make as many tokens as possible into `prefix_ops`
-    loop {
-        if let Some(token) = tokens.first() {
-            match *token {
-                TokenTree::Ident(lexer::Ident { ref name, span }) => {
-                    if let Some(ty) = UniOpType::try_prefix(name) {
-                        prefix_ops.push((ty, span));
-                    } else {
-                        break;
-                    }
+    sep(
+        &mut inner_tokens,
+        UniOpType::max_num_tokens(),
+        |tokens| match tokens {
+            lexer::pat::puncts![END] => SepSignal::Correct,
+            tokens => {
+                if let Some(ty) = UniOpType::try_prefix_tokens(tokens) {
+                    prefix_ops.push((ty, tokens[0].span().union(tokens[tokens.len() - 1].span())));
+                    SepSignal::Correct
+                } else {
+                    SepSignal::Incorrect
                 }
-                TokenTree::Punct7(lexer::Punct7 { mut span, .. })
-                | TokenTree::PunctString(lexer::PunctString { mut span, .. }) => {
-                    let punct = match token {
-                        TokenTree::Punct7(lexer::Punct7 { punct, .. }) => punct.as_bytes(),
-                        TokenTree::PunctString(lexer::PunctString { punct, .. }) => {
-                            punct.as_bytes()
-                        }
-                        _ => unreachable!(),
-                    };
-                    let leftover_punct_s = sep_puncts(punct, |s| {
-                        if let Some(ty) = UniOpType::try_prefix_buf(s) {
-                            let current_span = Span {
-                                end: span.start + s.len(),
-                                ..span
-                            };
-                            span.start = current_span.end;
-                            prefix_ops.push((ty, current_span));
-                            SepSignal::Correct
-                        } else {
-                            SepSignal::Incorrect
-                        }
-                    });
-                    if !leftover_punct_s.is_empty() {
-                        *tokens = initial_tokens;
-                        return Err(ParseError::UnknownPrefixOp {
-                            op: String::from_utf8(leftover_punct_s.to_owned()).unwrap(),
-                            span: Span {
-                                start: span.start + punct.len() - leftover_punct_s.len(),
-                                ..span
-                            },
-                        });
-                    }
-                }
-                _ => break,
             }
-            *tokens = &tokens[1..];
-        } else {
-            return Err(ParseError::Expected {
+        },
+    );
+    let value_token;
+    (value_token, inner_tokens) =
+        inner_tokens
+            .split_first()
+            .ok_or_else(|| ParseError::Expected {
                 name: "a value",
-                span: Span {
-                    start: tokens_span.end,
-                    ..tokens_span
-                },
-            });
-        }
-    }
-
+                span: prefix_ops
+                    .last()
+                    .expect("No tokens were passed to `parser::parse_val`")
+                    .1
+                    .ending(),
+            })?;
     // Get the value, pretty obvious
-    let mut value = Some(match *tokens.first().unwrap() {
-        TokenTree::Ident(lexer::Ident { ref name, span }) => match &**name {
+    let mut value = Some(match *value_token {
+        lexer::pat::ident!({ ref name, span }) => match name.as_str() {
             "false" => Expr::Bool(Bool { value: false, span }),
             "true" => Expr::Bool(Bool { value: true, span }),
+            "if" => {
+                let mut simple_ifs = vec![];
+                loop {
+                    let cond = parse_expr(&mut inner_tokens)?;
+                    let then_token;
+                    (then_token, inner_tokens) =
+                        inner_tokens
+                            .split_first()
+                            .ok_or_else(|| ParseError::Expected {
+                                name: "a 'then block' for the `if` expression",
+                                span: cond.span().ending(),
+                            })?;
+                    let then_block;
+                    then_block = match *then_token {
+                        lexer::pat::punct!(b':') => parse_expr(&mut inner_tokens)?,
+                        lexer::pat::group!({
+                            delim: lexer::Delimiter::Braces,
+                            ref tokens,
+                            span,
+                        }) => Expr::Block(Block {
+                            stmts: parse_block(tokens)?,
+                            span,
+                        }),
+                        _ => {
+                            return Err(ParseError::Expected {
+                                name: "a 'then block' for the `if` expression",
+                                span: cond.span().ending(),
+                            });
+                        }
+                    };
+                    simple_ifs.push(SimpleIf { cond, then_block });
+                    match inner_tokens.first() {
+                        Some(lexer::pat::ident!({ ref name, .. })) if name == "elif" => {
+                            inner_tokens = &inner_tokens[1..];
+                        }
+                        _ => break,
+                    }
+                }
+                let else_block;
+                match inner_tokens.split_first() {
+                    Some((lexer::pat::ident!({ ref name, .. }), new_tokens)) if name == "else" => {
+                        inner_tokens = new_tokens;
+                        let else_token;
+                        (else_token, inner_tokens) =
+                            inner_tokens
+                                .split_first()
+                                .ok_or_else(|| ParseError::Expected {
+                                    name: "an 'else block' for the `if-else` expression",
+                                    span: simple_ifs.last().unwrap().then_block.span().ending(),
+                                })?;
+                        else_block = Some(match *else_token {
+                            lexer::pat::punct!(b':') => parse_expr(&mut inner_tokens)?,
+                            lexer::pat::group!({
+                                delim: lexer::Delimiter::Braces,
+                                ref tokens,
+                                span,
+                            }) => Expr::Block(Block {
+                                stmts: parse_block(tokens)?,
+                                span,
+                            }),
+                            _ => {
+                                return Err(ParseError::Expected {
+                                    name: "an 'else block' for the `if-else` expression",
+                                    span: else_token.span().begining(),
+                                });
+                            }
+                        });
+                    }
+                    _ => {
+                        else_block = None;
+                    }
+                }
+
+                Expr::If(If {
+                    span: span.union(
+                        else_block
+                            .as_ref()
+                            .map(Expr::span)
+                            .unwrap_or(simple_ifs.last().unwrap().then_block.span()),
+                    ),
+                    ifs: simple_ifs,
+                    else_block: else_block.map(Box::new),
+                })
+            }
+            "return" => {
+                let expr = parse_tupling_expr(&mut inner_tokens)?;
+                Expr::Return(Return {
+                    span: span.union(expr.span()),
+                    expr: Box::new(expr),
+                })
+            }
             _ => Expr::Var(Var {
                 name: name.clone(),
                 span,
             }),
         },
-        TokenTree::IntLiteral(lexer::IntLiteral { value, span }) => Expr::Int(Int { value, span }),
-        TokenTree::FloatLiteral(lexer::FloatLiteral { value, span }) => {
-            Expr::Float(Float { value, span })
-        }
-        TokenTree::StrLiteral(lexer::StrLiteral { ref value, span }) => Expr::Str(Str {
+        lexer::pat::int!({ value, span }) => Expr::Int(Int { value, span }),
+        lexer::pat::float!({ value, span }) => Expr::Float(Float { value, span }),
+        lexer::pat::str!({ ref value, span }) => Expr::Str(Str {
             value: value.clone(),
             span,
         }),
-        TokenTree::Group(lexer::Group {
+        lexer::pat::group!({
             delim: lexer::Delimiter::Parentheses,
             ref tokens,
             span,
@@ -527,7 +696,7 @@ fn parse_val<'a, 'b>(
                 })
             }
         }
-        TokenTree::Group(lexer::Group {
+        lexer::pat::group!({
             delim: lexer::Delimiter::Brackets,
             ref tokens,
             span,
@@ -535,124 +704,68 @@ fn parse_val<'a, 'b>(
             values: parse_expr_list(tokens)?.0,
             span,
         }),
+        lexer::pat::group!({
+            delim: lexer::Delimiter::Braces,
+            ref tokens,
+            span,
+        }) => Expr::Block(Block {
+            stmts: parse_block(tokens)?,
+            span,
+        }),
         ref token => {
-            let token_span = token.span();
             return Err(ParseError::Expected {
                 name: "a value",
-                span: Span {
-                    end: token_span.start,
-                    ..token_span
-                },
+                span: token.span().begining(),
             });
         }
     });
-    *tokens = &tokens[1..];
 
     // Make as many tokens as possible into suffix ops
-    let mut leftover_punct = None;
-    loop {
-        if let Some(token) = tokens.first() {
-            match *token {
-                TokenTree::Punct7(lexer::Punct7 {
-                    span: mut punct_span,
-                    ..
-                })
-                | TokenTree::PunctString(lexer::PunctString {
-                    span: mut punct_span,
-                    ..
-                }) => {
-                    let punct = match token {
-                        TokenTree::Punct7(lexer::Punct7 { punct, .. }) => punct.as_bytes(),
-                        TokenTree::PunctString(lexer::PunctString { punct, .. }) => {
-                            punct.as_bytes()
-                        }
-                        _ => unreachable!(),
-                    };
-
-                    match sep_puncts(&punct[..punct.len()], |s| {
-                        if let Some(ty) = UniOpType::try_suffix_buf(s) {
-                            let current_span = Span {
-                                end: punct_span.start + s.len(),
-                                ..punct_span
-                            };
-                            punct_span.start = current_span.end;
-                            let expr = value.take().unwrap();
-                            let total_span = expr.span().union(current_span);
-                            value = Some(Expr::UniOp(UniOp {
-                                op: ty,
-                                expr: Box::new(expr),
-                                op_span: current_span,
-                                total_span,
-                            }));
-                            SepSignal::Correct
-                        } else {
-                            SepSignal::Incorrect
-                        }
-                    }) {
-                        b"" => {}
-                        b"." => {
-                            *tokens = &tokens[1..];
-                            match tokens[0] {
-                                TokenTree::Ident(lexer::Ident {
-                                    ref name,
-                                    span: prop_span,
-                                }) => {
-                                    let expr = value.take().unwrap();
-                                    let total_span = expr.span().union(prop_span);
-                                    value = Some(Expr::PropAccess(PropAccess {
-                                        expr: Box::new(expr),
-                                        prop: name.clone(),
-                                        prop_span: punct_span.union(prop_span),
-                                        total_span,
-                                    }));
-                                }
-                                TokenTree::IntLiteral(lexer::IntLiteral {
-                                    value: element,
-                                    span: element_span,
-                                }) => {
-                                    if element < 0 {
-                                        return Err(ParseError::NegativeTupleAccess {
-                                            span: element_span,
-                                        });
-                                    }
-                                    let expr = value.take().unwrap();
-                                    let total_span = expr.span().union(element_span);
-                                    value = Some(Expr::TupleAccess(TupleAccess {
-                                        expr: Box::new(expr),
-                                        element: element as _,
-                                        element_span: punct_span.union(element_span),
-                                        total_span,
-                                    }));
-                                }
-                                _ => {
-                                    return Err(ParseError::UnexpectedPunct {
-                                        punct: ".".to_owned(),
-                                        span: punct_span,
-                                    })
-                                }
-                            }
-                        }
-                        leftover_punct_s => {
-                            if leftover_punct_s.len() < punct.len() {
-                                leftover_punct = Some(LeftoverPunct {
-                                    punct: leftover_punct_s,
-                                    span: Span {
-                                        start: punct_span.start + punct.len()
-                                            - leftover_punct_s.len(),
-                                        ..punct_span
-                                    },
-                                });
-                                *tokens = &tokens[1..];
-                            }
-                            break;
-                        }
+    result_sep(
+        &mut inner_tokens,
+        UniOpType::max_num_tokens().max(3),
+        |tokens| {
+            Ok(match tokens {
+                lexer::pat::puncts![END] => SepSignal::Correct,
+                lexer::pat::tokens![
+                    punct: { ch: b'.', span: punct_span },
+                    punct: END,
+                    ident: { ref name, span: prop_span },
+                ] => {
+                    let expr = value.take().unwrap();
+                    let total_span = expr.span().union(prop_span);
+                    value = Some(Expr::PropAccess(PropAccess {
+                        expr: Box::new(expr),
+                        prop: name.clone(),
+                        prop_span: punct_span.union(prop_span),
+                        total_span,
+                    }));
+                    SepSignal::Correct
+                }
+                lexer::pat::tokens![
+                    punct: { ch: b'.', span: punct_span },
+                    punct: END,
+                    int: { value: element, span: element_span }
+                ] => {
+                    if element < 0 {
+                        return Err(ParseError::NegativeTupleAccess { span: element_span });
+                    } else {
+                        let expr = value.take().unwrap();
+                        let total_span = expr.span().union(element_span);
+                        value = Some(Expr::TupleAccess(TupleAccess {
+                            expr: Box::new(expr),
+                            element: element as _,
+                            element_span: punct_span.union(element_span),
+                            total_span,
+                        }));
+                        SepSignal::Correct
                     }
                 }
-                TokenTree::Group(lexer::Group {
+                lexer::pat::tokens![group: {
                     delim: lexer::Delimiter::Parentheses,
                     ref tokens,
                     span,
-                }) => {
+                }] => {
                     let expr = value.take().unwrap();
                     let total_span = expr.span().union(span);
                     value = Some(Expr::FnCall(FnCall {
@@ -661,14 +774,27 @@ fn parse_val<'a, 'b>(
                         args_span: span,
                         total_span,
                     }));
+                    SepSignal::Correct
                 }
-                _ => break,
-            }
-            *tokens = &tokens[1..];
-        } else {
-            break;
-        }
-    }
+                tokens => {
+                    if let Some(ty) = UniOpType::try_suffix_tokens(tokens) {
+                        let current_span = tokens[0].span().union(tokens[tokens.len() - 1].span());
+                        let expr = value.take().unwrap();
+                        let total_span = expr.span().union(current_span);
+                        value = Some(Expr::UniOp(UniOp {
+                            op: ty,
+                            expr: Box::new(expr),
+                            op_span: current_span,
+                            total_span,
+                        }));
+                        SepSignal::Correct
+                    } else {
+                        SepSignal::Incorrect
+                    }
+                }
+            })
+        },
+    )?;
 
     // Apply prefix ops
     for (ty, op_span) in prefix_ops.into_iter().rev() {
@@ -682,7 +808,8 @@ fn parse_val<'a, 'b>(
         }))
     }
 
-    Ok((value.unwrap(), leftover_punct))
+    *tokens = inner_tokens;
+    Ok(value.unwrap())
 }
 
 pub fn pub_parse_expr<'a>(
@@ -690,7 +817,7 @@ pub fn pub_parse_expr<'a>(
     file: &str,
     file_lines: &[usize],
 ) -> Expr<'a> {
-    let (expr, leftover_punct) = match parse_expr(tokens, None) {
+    let expr = match parse_tupling_expr(tokens) {
         Ok(out) => out,
         Err(err) => {
             for span in err.spans() {
@@ -699,94 +826,39 @@ pub fn pub_parse_expr<'a>(
             panic!("Failed to parse expression with error: {err}");
         }
     };
-    assert!(leftover_punct.is_none());
     expr
 }
 
-fn parse_expr<'a, 'b>(
-    tokens: &mut &'b [TokenTree<'a>],
-    mut leftover_punct: Option<LeftoverPunct<'a, 'b>>,
-) -> Result<(Expr<'a>, Option<LeftoverPunct<'a, 'b>>), ParseError<'a>> {
-    let value;
-    (value, leftover_punct) = parse_val(tokens, leftover_punct.take())?;
+fn parse_expr<'a>(tokens: &mut &[TokenTree<'a>]) -> Result<Expr<'a>, ParseError<'a>> {
+    let mut inner_tokens = *tokens;
+
+    let value = parse_val(&mut inner_tokens)?;
     let mut values = vec![value];
     let mut ops: Vec<(DuoOpType, Span<'a>)> = vec![];
-    while !tokens.is_empty() {
-        let op;
-        let op_span;
-        if let Some(LeftoverPunct { punct, span }) = leftover_punct.take() {
-            let mut maybe_op = None;
-            let leftover_punct_s = sep_puncts(punct, |s| {
-                maybe_op = DuoOpType::try_from_buf(s);
-                if maybe_op.is_some() {
-                    SepSignal::LastCorrect
-                } else {
-                    SepSignal::Incorrect
-                }
-            });
-            op_span = Span {
-                end: span.start + punct.len() - leftover_punct_s.len(),
-                ..span
-            };
-            if let Some(maybe_op) = maybe_op {
-                op = maybe_op;
-            } else {
-                leftover_punct = Some(LeftoverPunct { punct, span });
-                break;
-            }
-            if !leftover_punct_s.is_empty() {
-                leftover_punct = Some(LeftoverPunct {
-                    punct: leftover_punct_s,
-                    span: Span {
-                        start: op_span.end,
-                        ..span
-                    },
-                });
-            }
-        } else {
-            match tokens[0] {
-                TokenTree::Punct7(lexer::Punct7 { span, .. })
-                | TokenTree::PunctString(lexer::PunctString { span, .. }) => {
-                    let punct = match &tokens[0] {
-                        TokenTree::Punct7(lexer::Punct7 { punct, .. }) => punct.as_bytes(),
-                        TokenTree::PunctString(lexer::PunctString { punct, .. }) => {
-                            punct.as_bytes()
-                        }
-                        _ => unreachable!(),
-                    };
-                    let mut maybe_op = None;
-                    let leftover_punct_s = sep_puncts(punct, |s| {
-                        maybe_op = DuoOpType::try_from_buf(s);
-                        if maybe_op.is_some() {
-                            SepSignal::LastCorrect
-                        } else {
-                            SepSignal::Incorrect
-                        }
-                    });
-                    op_span = Span {
-                        end: span.start + punct.len() - leftover_punct_s.len(),
-                        ..span
-                    };
-                    if let Some(maybe_op) = maybe_op {
-                        op = maybe_op;
+    while !inner_tokens.is_empty() {
+        let mut op_x = None;
+        result_sep(
+            &mut inner_tokens,
+            DuoOpType::max_len(),
+            |tokens| match tokens {
+                lexer::pat::puncts![END] => Ok(SepSignal::Correct),
+                tokens => {
+                    if let Some(op_type) = DuoOpType::try_from_tokens(tokens) {
+                        op_x = Some((
+                            op_type,
+                            tokens[0].span().union(tokens.last().unwrap().span()),
+                        ));
+                        Ok(SepSignal::FinalCorrect)
                     } else {
-                        break;
-                    }
-                    if !leftover_punct_s.is_empty() {
-                        leftover_punct = Some(LeftoverPunct {
-                            punct: leftover_punct_s,
-                            span: Span {
-                                start: op_span.end,
-                                ..span
-                            },
-                        });
+                        Ok(SepSignal::Incorrect)
                     }
                 }
-                _ => break,
-            }
-            *tokens = &tokens[1..];
+            },
+        )?;
+        let (op, op_span) = match op_x {
+            Some(x) => x,
+            None => break,
         };
-        // println!("Add op: `{:?}`", current_op);
         while let Some(&(last_op, last_op_span)) = ops.last() {
             if last_op.level() < op.level()
                 || (last_op.level() == op.level() && op.level_type() == DuoOpLevelType::LeftToRight)
@@ -817,10 +889,8 @@ fn parse_expr<'a, 'b>(
         }
         ops.push((op, op_span));
 
-        let value;
-        (value, leftover_punct) = parse_val(tokens, leftover_punct.take())?;
         // println!("Add value: `{:?}`", value);
-        values.push(value);
+        values.push(parse_val(&mut inner_tokens)?);
     }
     while let Some((op, op_span)) = ops.pop() {
         let right_expr = Box::new(values.pop().unwrap());
@@ -838,94 +908,159 @@ fn parse_expr<'a, 'b>(
     }
 
     debug_assert_eq!(values.len(), 1);
-    Ok((values.pop().unwrap(), leftover_punct))
+
+    *tokens = inner_tokens;
+    Ok(values.pop().unwrap())
 }
 
-fn _parse_tupling_expr<'a, 'b>(
-    _tokens: &mut &'b [TokenTree<'a>],
-    mut _leftover_punct: Option<LeftoverPunct<'a, 'b>>,
-) -> (Expr<'a>, Option<LeftoverPunct<'a, 'b>>) {
-    todo!()
+fn parse_tupling_expr<'a>(tokens: &mut &[TokenTree<'a>]) -> Result<Expr<'a>, ParseError<'a>> {
+    let mut inner_tokens = *tokens;
+
+    let mut exprs = vec![parse_expr(&mut inner_tokens)?];
+    let mut has_comma = false;
+    while !inner_tokens.is_empty() {
+        match inner_tokens.first() {
+            Some(lexer::pat::punct!(b',')) => {
+                inner_tokens = &inner_tokens[1..];
+                has_comma = true;
+            }
+            _ => {
+                break;
+            }
+        };
+
+        match parse_expr(&mut inner_tokens) {
+            Ok(expr) => exprs.push(expr),
+            Err(_) => break,
+        }
+    }
+
+    *tokens = inner_tokens;
+    if has_comma {
+        Ok(Expr::Tuple(Tuple {
+            span: exprs[0].span().union(exprs.last().unwrap().span()),
+            values: exprs,
+        }))
+    } else {
+        assert_eq!(exprs.len(), 1);
+        Ok(exprs.pop().unwrap())
+    }
 }
 
 /// Takes a list of tokens and parses them into a list of expressions.
 ///
 /// # Returns
 /// Returns a vector of the expressions and a bool specifying whether the list contains a comma.
-pub fn parse_expr_list<'a>(
+fn parse_expr_list<'a>(
     mut tokens: &[TokenTree<'a>],
 ) -> Result<(Vec<Expr<'a>>, bool), ParseError<'a>> {
     let mut exprs = vec![];
 
     let mut has_comma = false;
-    let mut leftover_punct = None;
     while !tokens.is_empty() {
-        let expr;
-        (expr, leftover_punct) = parse_expr(&mut tokens, leftover_punct)?;
+        let expr = parse_expr(&mut tokens)?;
         exprs.push(expr);
 
         if tokens.is_empty() {
             break;
         }
 
-        let LeftoverPunct { punct, span } = if let Some(leftover_punct) = leftover_punct.take() {
-            leftover_punct
-        } else {
-            let leftover_punct = match tokens[0] {
-                TokenTree::Punct7(lexer::Punct7 { ref punct, span }) => LeftoverPunct {
-                    punct: punct.as_bytes(),
-                    span,
-                },
-                TokenTree::PunctString(lexer::PunctString { ref punct, span }) => LeftoverPunct {
-                    punct: punct.as_bytes(),
-                    span,
-                },
-                ref token => {
-                    let token_span = token.span();
-                    return Err(ParseError::Expected {
-                        name: "`,`",
-                        span: Span {
-                            end: token_span.start,
-                            ..token_span
-                        },
-                    });
-                }
-            };
-            tokens = &tokens[1..];
-            leftover_punct
+        match tokens[0] {
+            lexer::pat::punct![b','] => {
+                tokens = &tokens[1..];
+                has_comma = true;
+            }
+            ref token => {
+                return Err(ParseError::Expected {
+                    name: "`,`",
+                    span: token.span().begining(),
+                });
+            }
         };
-        if punct[0] != b',' {
-            return Err(ParseError::Expected {
-                name: "`,`",
-                span: Span {
-                    end: span.start,
-                    ..span
-                },
-            });
-        }
-        if 1 < punct.len() {
-            leftover_punct = Some(LeftoverPunct {
-                punct: &punct[1..],
-                span: Span {
-                    start: span.start + 1,
-                    ..span
-                },
-            });
-        }
-        has_comma = true;
-    }
-    if let Some(LeftoverPunct { punct, span }) = leftover_punct {
-        return Err(ParseError::UnexpectedPunct {
-            punct: String::from_utf8(punct.to_vec()).unwrap(),
-            span,
-        });
     }
 
     Ok((exprs, has_comma))
 }
 
-pub fn parse_stmt<'a>(_tokens: &mut &[TokenTree<'a>]) -> Stmt<'a> {
-    todo!()
+pub fn parse_assign_stmt<'a>(tokens: &mut &[TokenTree<'a>]) -> Result<Assign<'a>, ParseError<'a>> {
+    let mut inner_tokens = *tokens;
+    fn check(expr: &Expr) -> bool {
+        match *expr {
+            Expr::Var(_) => true,
+            Expr::PropAccess(_) => true,
+            Expr::TupleAccess(_) => true,
+            Expr::FnCall(_) => true,
+            Expr::UniOp(UniOp {
+                op: UniOpType::Deref,
+                ..
+            }) => true,
+            Expr::Tuple(Tuple { ref values, .. }) => values.iter().all(check),
+            Expr::List(List { ref values, .. }) => values.iter().all(check),
+            _ => false,
+        }
+    }
+
+    let mut assigned = vec![];
+    loop {
+        let expr = parse_tupling_expr(&mut inner_tokens)?;
+        if result_sep(&mut inner_tokens, 2, |tokens| match tokens {
+            lexer::pat::puncts![END] => Ok(SepSignal::Correct),
+            lexer::pat::puncts![b'=', END] | lexer::pat::puncts![b'='] => {
+                Ok(SepSignal::FinalCorrect)
+            }
+            _ => Ok(SepSignal::Incorrect),
+        })? == SepOut::FinalCorrect
+        {
+            if check(&expr) {
+                assigned.push(expr);
+            } else {
+                return Err(ParseError::InvalidLeftHandOfAssignment { span: expr.span() });
+            }
+        } else {
+            assigned.push(expr);
+            break;
+        }
+    }
+    let mut span = assigned.first().unwrap().span();
+    if result_sep(&mut inner_tokens, 1, |tokens| match tokens {
+        lexer::pat::puncts![END] => Ok(SepSignal::Correct),
+        lexer::pat::new_lines![{ span: nl_span }] => {
+            span = span.union(nl_span);
+            Ok(SepSignal::FinalCorrect)
+        }
+        _ => Ok(SepSignal::Incorrect),
+    })? == SepOut::FinalCorrect
+    {
+        *tokens = inner_tokens;
+        Ok(Assign {
+            span,
+            value: assigned.pop().unwrap(),
+            assigned,
+        })
+    } else {
+        Err(ParseError::Expected {
+            name: "a new line",
+            span: span.ending(),
+        })
+    }
+}
+
+pub fn parse_stmt<'a>(tokens: &mut &[TokenTree<'a>]) -> Result<Stmt<'a>, ParseError<'a>> {
+    Ok(Stmt::Assign(parse_assign_stmt(tokens)?))
+}
+
+pub fn parse_block<'a>(mut tokens: &[TokenTree<'a>]) -> Result<Vec<Stmt<'a>>, ParseError<'a>> {
+    let mut stmts = vec![];
+    while let Some(lexer::pat::punct!(END) | lexer::pat::new_line!()) = tokens.first() {
+        tokens = &tokens[1..];
+    }
+    while !tokens.is_empty() {
+        stmts.push(parse_stmt(&mut tokens)?);
+        while let Some(lexer::pat::punct!(END) | lexer::pat::new_line!()) = tokens.first() {
+            tokens = &tokens[1..];
+        }
+    }
+    Ok(stmts)
 }
 
 pub fn parse_module<'a>(mut _tokens: &[TokenTree<'a>]) -> Module<'a> {

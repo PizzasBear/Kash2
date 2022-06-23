@@ -1,30 +1,72 @@
-use crate::{lines, Ascii7, Span};
+use crate::Span;
 use std::{error::Error, fmt, path::Path};
 
 // artemis fowl vs johan liebert
 
-#[derive(Debug)]
 pub struct Ident<'a> {
     pub name: String,
     pub span: Span<'a>,
 }
 
-#[derive(Debug)]
-pub struct Punct7<'a> {
-    pub punct: Ascii7,
+impl<'a> fmt::Debug for Ident<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Ident({:?} at '{}')", self.name, self.span)
+    }
+}
+
+pub struct Punct<'a> {
+    pub ch: u8,
     pub span: Span<'a>,
 }
 
-#[derive(Debug)]
-pub struct PunctString<'a> {
-    pub punct: String,
-    pub span: Span<'a>,
+impl<'a> Punct<'a> {
+    pub const END: u8 = !0;
+
+    #[inline]
+    pub const fn end(span: Span<'a>) -> Self {
+        Self {
+            ch: Self::END,
+            span,
+        }
+    }
+
+    #[inline]
+    pub const fn is_end(&self) -> bool {
+        self.ch == Self::END
+    }
 }
 
-enum Punct<'a> {
-    String(PunctString<'a>),
-    Ascii7(Punct7<'a>),
+impl<'a> fmt::Debug for Punct<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_end() {
+            write!(f, "Punct(END at '{}')", self.span)
+        } else {
+            write!(f, "Punct({:?} at '{}')", self.ch as char, self.span)
+        }
+    }
 }
+
+#[derive(Debug)]
+struct PunctString<'a> {
+    puncts: Vec<u8>,
+    span: Span<'a>,
+}
+// #[derive(Debug)]
+// pub struct Punct7<'a> {
+//     pub punct: Ascii7,
+//     pub span: Span<'a>,
+// }
+//
+// #[derive(Debug)]
+// pub struct PunctString<'a> {
+//     pub punct: String,
+//     pub span: Span<'a>,
+// }
+//
+// enum Punct<'a> {
+//     String(PunctString<'a>),
+//     Ascii7(Punct7<'a>),
+// }
 
 pub const PUNCT_CHARS: &'static [u8] = &[
     b'+', b'-', b'*', b'/', b'%', b'<', b'>', // math ops
@@ -35,22 +77,37 @@ pub const PUNCT_CHARS: &'static [u8] = &[
 
 pub const SPECIAL_CHARS: &'static [u8] = &[b'(', b')', b'[', b']', b'{', b'}', b'\"', b'\''];
 
-#[derive(Debug)]
 pub struct StrLiteral<'a> {
     pub value: String,
     pub span: Span<'a>,
 }
 
-#[derive(Debug)]
+impl<'a> fmt::Debug for StrLiteral<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "StrLiteral({:?} at '{}')", &self.value, self.span)
+    }
+}
+
 pub struct IntLiteral<'a> {
     pub value: i64,
     pub span: Span<'a>,
 }
 
-#[derive(Debug)]
+impl<'a> fmt::Debug for IntLiteral<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IntLiteral({:?} at '{}')", &self.value, self.span)
+    }
+}
+
 pub struct FloatLiteral<'a> {
     pub value: f64,
     pub span: Span<'a>,
+}
+
+impl<'a> fmt::Debug for FloatLiteral<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FloatLiteral({:?} at '{}')", &self.value, self.span)
+    }
 }
 
 #[derive(Debug)]
@@ -59,12 +116,23 @@ pub enum NumberLiteral<'a> {
     Float(FloatLiteral<'a>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Delimiter {
     Parentheses,
     Brackets,
     Braces,
     None,
+}
+
+impl fmt::Debug for Delimiter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parentheses => write!(f, "Delim()"),
+            Self::Brackets => write!(f, "Delim[]"),
+            Self::Braces => write!(f, "Delim{{}}"),
+            Self::None => write!(f, "Delim::None"),
+        }
+    }
 }
 
 impl Delimiter {
@@ -132,35 +200,240 @@ impl From<char> for Delimiter {
     }
 }
 
-#[derive(Debug)]
 pub struct Group<'a> {
     pub delim: Delimiter,
     pub tokens: Vec<TokenTree<'a>>,
     pub span: Span<'a>,
 }
 
-#[derive(Debug)]
+impl<'a> fmt::Debug for Group<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Group(at '{}', {:?} of ", self.span, self.delim)?;
+        f.debug_list().entries(self.tokens.iter()).finish()?;
+        write!(f, ")")
+    }
+}
+
 pub struct NewLine<'a> {
     pub span: Span<'a>,
 }
 
-#[derive(Debug)]
+impl<'a> fmt::Debug for NewLine<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NewLine(at '{}')", self.span)
+    }
+}
+
+pub mod pat {
+    macro_rules! new_line {
+        () => {
+            $crate::lexer::TokenTree::NewLine(_)
+        };
+        (_) => {
+            $crate::lexer::pat::new_line!()
+        };
+        ({ $($tt:tt)+ }) => {
+            $crate::lexer::TokenTree::NewLine($crate::lexer::NewLine { $($tt)+ })
+        };
+    }
+    macro_rules! punct {
+        () => {
+            $crate::lexer::TokenTree::Punct(_)
+        };
+        (_) => {
+            $crate::lexer::pat::punct!()
+        };
+        ($ch:literal) => {
+            $crate::lexer::TokenTree::Punct($crate::lexer::Punct { ch: $ch, .. })
+        };
+        (END) => {
+            $crate::lexer::TokenTree::Punct($crate::lexer::Punct {
+                ch: $crate::lexer::Punct::END,
+                ..
+            })
+        };
+        ({ $($tt:tt)+ }) => {
+            $crate::lexer::TokenTree::Punct($crate::lexer::Punct { $($tt)+ })
+        };
+        ([ $($tt:tt)|+ ]) => {
+            $($crate::lexer::pat::punct!($tt))|+
+        };
+    }
+    macro_rules! ident {
+        () => {
+            $crate::lexer::TokenTree::Ident(_)
+        };
+        (_) => {
+            $crate::lexer::pat::ident!()
+        };
+        // ($name:literal) => {
+        //     $crate::lexer::TokenTree::Ident($crate::lexer::Ident { name: $name, .. })
+        // };
+        ({ $($tt:tt)+ }) => {
+            $crate::lexer::TokenTree::Ident($crate::lexer::Ident { $($tt)+ })
+        };
+        ([ $($tt:tt)|+ ]) => {
+            $($crate::lexer::pat::ident!($tt))|+
+        };
+    }
+    macro_rules! int {
+        () => {
+            $crate::lexer::TokenTree::IntLiteral(_)
+        };
+        (_) => {
+            $crate::lexer::pat::int!()
+        };
+        ($num:literal) => {
+            $crate::lexer::TokenTree::IntLiteral($crate::lexer::IntLiteral { value: $num, .. })
+        };
+        ({ $($tt:tt)+ }) => {
+            $crate::lexer::TokenTree::IntLiteral($crate::lexer::IntLiteral { $($tt)+ })
+        };
+        ([ $($tt:tt)|+ ]) => {
+            $($crate::lexer::pat::int!($tt))|+
+        };
+    }
+    macro_rules! float {
+        () => {
+            $crate::lexer::TokenTree::FloatLiteral(_)
+        };
+        (_) => {
+            $crate::lexer::pat::float!()
+        };
+        ($num:literal) => {
+            $crate::lexer::TokenTree::FloatLiteral($crate::lexer::FloatLiteral { value: $num, .. })
+        };
+        ({ $($tt:tt)+ }) => {
+            $crate::lexer::TokenTree::FloatLiteral($crate::lexer::FloatLiteral { $($tt)+ })
+        };
+        ([ $($tt:tt)|+ ]) => {
+            $($crate::lexer::pat::float!($tt))|+
+        };
+    }
+    macro_rules! str {
+        () => {
+            $crate::lexer::TokenTree::StrLiteral(_)
+        };
+        (_) => {
+            $crate::lexer::pat::str!()
+        };
+        ($text:literal) => {
+            $crate::lexer::TokenTree::StrLiteral($crate::lexer::StrLiteral { value: $text, .. })
+        };
+        ({ $($tt:tt)+ }) => {
+            $crate::lexer::TokenTree::StrLiteral($crate::lexer::StrLiteral { $($tt)+ })
+        };
+        ([ $($tt:tt)|+ ]) => {
+            $($crate::lexer::pat::str!($tt))|+
+        };
+    }
+    macro_rules! group {
+        () => {
+            $crate::lexer::TokenTree::Group(_)
+        };
+        (_) => {
+            $crate::lexer::pat::group!()
+        };
+        ($delim:ident) => {
+            $crate::lexer::TokenTree::Group($crate::lexer::Group { delim: $crate::lexer::Delimiter::$delim, .. })
+        };
+        ({ $($tt:tt)+ }) => {
+            $crate::lexer::TokenTree::Group($crate::lexer::Group { $($tt)+ })
+        };
+        ([ $($tt:tt)|+ ]) => {
+            $($crate::lexer::pat::group!($tt))|+
+        };
+    }
+    macro_rules! token {
+        (_) => {
+            _
+        };
+        (new_line $(: $tt:tt)?) => {
+            $crate::lexer::pat::new_line!($($tt)?)
+        };
+        (punct $(: $tt:tt)?) => {
+            $crate::lexer::pat::punct!($($tt)?)
+        };
+        (ident $(: $tt:tt)?) => {
+            $crate::lexer::pat::ident!($($tt)?)
+        };
+        (int $(: $tt:tt)?) => {
+            $crate::lexer::pat::int!($($tt)?)
+        };
+        (float $(: $tt:tt)?) => {
+            $crate::lexer::pat::float!($($tt)?)
+        };
+        (str $(: $tt:tt)?) => {
+            $crate::lexer::pat::str!($($tt)?)
+        };
+        (group $(: $tt:tt)?) => {
+            $crate::lexer::pat::group!($($tt)?)
+        };
+        (multi: [ $($name:ident $(: $tt:tt)?)|+ ]) => {
+            $($crate::lexer::pat::token!($name $(: $tt)?))|+
+        };
+        (pat: ($pat:pat)) => {
+            $pat
+        };
+    }
+    macro_rules! tokens {
+        ($($type:ident $(:$token:tt)?,)*) => {
+            $crate::lexer::pat::tokens![$($type $(:$token)?),*]
+        };
+        ($($type:ident $(:$token:tt)?),*) => {
+            &[$($crate::lexer::pat::token![$type $(:$token)?]),*]
+        };
+    }
+    macro_rules! puncts {
+        ($($punct:tt,)*) => {
+            $crate::lexer::pat::puncts![$($punct),*]
+        };
+        ($($punct:tt),*) => {
+            &[$($crate::lexer::pat::punct![$punct]),*]
+        };
+    }
+    macro_rules! new_lines {
+        ($($punct:tt,)*) => {
+            $crate::lexer::pat::new_lines![$($punct),*]
+        };
+        ($($punct:tt),*) => {
+            &[$($crate::lexer::pat::new_line![$punct]),*]
+        };
+    }
+    pub(crate) use {
+        float, group, ident, int, new_line, new_lines, punct, puncts, str, token, tokens,
+    };
+}
+
 pub enum TokenTree<'a> {
     NewLine(NewLine<'a>),
     Ident(Ident<'a>),
-    Punct7(Punct7<'a>),
-    PunctString(PunctString<'a>),
+    Punct(Punct<'a>),
     Group(Group<'a>),
     StrLiteral(StrLiteral<'a>),
     IntLiteral(IntLiteral<'a>),
     FloatLiteral(FloatLiteral<'a>),
 }
 
+impl<'a> fmt::Debug for TokenTree<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Tt::")?;
+        match self {
+            Self::NewLine(x) => fmt::Debug::fmt(x, f),
+            Self::Ident(x) => fmt::Debug::fmt(x, f),
+            Self::Punct(x) => fmt::Debug::fmt(x, f),
+            Self::Group(x) => fmt::Debug::fmt(x, f),
+            Self::StrLiteral(x) => fmt::Debug::fmt(x, f),
+            Self::IntLiteral(x) => fmt::Debug::fmt(x, f),
+            Self::FloatLiteral(x) => fmt::Debug::fmt(x, f),
+        }
+    }
+}
+
 #[derive(Debug)]
-pub enum UngroupedToken<'a> {
+enum UngroupedToken<'a> {
     NewLine(NewLine<'a>),
     Ident(Ident<'a>),
-    Punct7(Punct7<'a>),
     PunctString(PunctString<'a>),
     StrLiteral(StrLiteral<'a>),
     IntLiteral(IntLiteral<'a>),
@@ -299,32 +572,33 @@ impl<'a> Group<'a> {
         for token in self.tokens.drain(..) {
             match (tokens.last(), token) {
                 (None | Some(TokenTree::NewLine(_)), TokenTree::NewLine(_)) => {}
-                (
-                    Some(TokenTree::Punct7(Punct7 {
-                        punct:
-                            Ascii7 {
-                                len: 1,
-                                chars: [b'\\', 0, 0, 0, 0, 0, 0],
-                            },
-                        ..
-                    })),
-                    TokenTree::NewLine(_),
-                ) => {
+                (Some(TokenTree::Punct(Punct { ch: Punct::END, .. })), TokenTree::NewLine(_))
+                    if 2 <= tokens.len()
+                        && matches!(
+                            tokens[tokens.len() - 2],
+                            TokenTree::Punct(Punct { ch: b'\\', .. })
+                        ) =>
+                {
+                    tokens.pop();
                     tokens.pop();
                 }
-                (
-                    _,
-                    TokenTree::Punct7(Punct7 {
-                        punct:
-                            Ascii7 {
-                                len: 1,
-                                chars: [b'\\', 0, 0, 0, 0, 0, 0],
-                            },
-                        span,
-                    }),
-                ) => {
+                (Some(TokenTree::Punct(_)), TokenTree::Punct(Punct { ch: b';', span })) => {
+                    tokens.push(TokenTree::Punct(Punct::end(Span {
+                        end: span.start,
+                        ..span
+                    })));
                     tokens.push(TokenTree::NewLine(NewLine { span }));
                 }
+                (_, TokenTree::Punct(Punct { ch: b';', span })) => {
+                    tokens.push(TokenTree::NewLine(NewLine { span }));
+                }
+                (
+                    Some(TokenTree::Punct(_)),
+                    token @ TokenTree::Punct(Punct { ch: Punct::END, .. }),
+                ) => {
+                    tokens.push(token);
+                }
+                (_, TokenTree::Punct(Punct { ch: Punct::END, .. })) => {}
                 (_, TokenTree::Group(mut group)) => {
                     group.post_process();
                     tokens.push(TokenTree::Group(group));
@@ -343,8 +617,7 @@ impl<'a> TokenTree<'a> {
         match *self {
             Self::Ident(Ident { span, .. }) => span,
             Self::Group(Group { span, .. }) => span,
-            Self::Punct7(Punct7 { span, .. }) => span,
-            Self::PunctString(PunctString { span, .. }) => span,
+            Self::Punct(Punct { span, .. }) => span,
             Self::NewLine(NewLine { span, .. }) => span,
             Self::StrLiteral(StrLiteral { span, .. }) => span,
             Self::IntLiteral(IntLiteral { span, .. }) => span,
@@ -397,11 +670,20 @@ impl<'a> TokenTree<'a> {
                 UngroupedToken::FloatLiteral(float_literal) => {
                     group.tokens.push(Self::FloatLiteral(float_literal));
                 }
-                UngroupedToken::Punct7(punct) => {
-                    group.tokens.push(Self::Punct7(punct));
-                }
-                UngroupedToken::PunctString(punct) => {
-                    group.tokens.push(Self::PunctString(punct));
+                UngroupedToken::PunctString(PunctString { puncts, span }) => {
+                    for (i, ch) in puncts.into_iter().enumerate() {
+                        group.tokens.push(Self::Punct(Punct {
+                            ch,
+                            span: Span::new(span.path, span.start + i, span.start + i + 1),
+                        }));
+                    }
+                    debug_assert_eq!(
+                        group.tokens.last().unwrap().span(),
+                        Span::new(span.path, span.end - 1, span.end)
+                    );
+                    group.tokens.push(Self::Punct(Punct::end(Span::new(
+                        span.path, span.end, span.end,
+                    ))));
                 }
             }
         }
@@ -459,11 +741,20 @@ impl<'a> TokenTree<'a> {
                 UngroupedToken::FloatLiteral(float_literal) => {
                     group.tokens.push(Self::FloatLiteral(float_literal));
                 }
-                UngroupedToken::Punct7(punct) => {
-                    group.tokens.push(Self::Punct7(punct));
-                }
-                UngroupedToken::PunctString(punct) => {
-                    group.tokens.push(Self::PunctString(punct));
+                UngroupedToken::PunctString(PunctString { puncts, span }) => {
+                    for (i, ch) in puncts.into_iter().enumerate() {
+                        group.tokens.push(Self::Punct(Punct {
+                            ch,
+                            span: Span::new(span.path, span.start + i, span.start + i + 1),
+                        }));
+                    }
+                    debug_assert_eq!(
+                        group.tokens.last().unwrap().span(),
+                        Span::new(span.path, span.end - 1, span.end)
+                    );
+                    group.tokens.push(Self::Punct(Punct::end(Span::new(
+                        span.path, span.end, span.end,
+                    ))));
                 }
             }
         }
@@ -482,24 +773,28 @@ impl<'a> TokenTree<'a> {
         s: &str,
     ) -> Result<NumberLiteral<'a>, LexingError<'a>> {
         let start = *ptr;
-        let sign;
-        (sign, *ptr) = match s.as_bytes()[start] {
-            b'+' => (1, start + 1),
-            b'-' => (-1, start + 1),
-            _ => (1, start),
-        };
-        let post_sign_start = *ptr;
-
-        let mut underscore_sep = false;
-        let radix = if s.as_bytes()[post_sign_start] == b'0' {
+        let mut num_str = String::new();
+        match s.as_bytes()[*ptr] {
+            b @ (b'+' | b'-') => {
+                num_str.push(b as char);
+                *ptr += 1;
+            }
+            _ => {}
+        }
+        let mut underscore_allowed = false;
+        let radix = if s.as_bytes()[*ptr] == b'0' {
+            num_str.push('0');
             *ptr += 2;
-            match s.as_bytes()[post_sign_start + 1] {
+            match s.as_bytes()[*ptr - 1] {
                 b'x' => 16,
                 b'o' => 8,
                 b'b' => 2,
-                b'0'..=b'9' => 10,
+                b'0'..=b'9' => {
+                    underscore_allowed = true;
+                    10
+                }
                 b'_' => {
-                    underscore_sep = true;
+                    underscore_allowed = false;
                     10
                 }
                 ch if ch.is_ascii_whitespace()
@@ -507,28 +802,25 @@ impl<'a> TokenTree<'a> {
                     || SPECIAL_CHARS.contains(&ch) =>
                 {
                     *ptr -= 1;
-                    10
+                    return Ok(NumberLiteral::Int(IntLiteral {
+                        value: i64::from_str_radix(&num_str, 10).unwrap(),
+                        span: Span::new(path, start, *ptr),
+                    }));
                 }
                 _ => {
                     return Err(LexingError::UnsupportedNumberBase {
                         span: Span::new(
                             path,
-                            post_sign_start + 1,
-                            s.get(post_sign_start + 1..)
+                            *ptr - 1,
+                            s.get(*ptr - 1..)
                                 .unwrap()
                                 .char_indices()
                                 .nth(1)
-                                .map(|(i, _)| post_sign_start + 1 + i)
+                                .map(|(i, _)| *ptr - 1 + i)
                                 .unwrap(),
                         ),
-                        base: s
-                            .get(post_sign_start + 1..)
-                            .unwrap()
-                            .chars()
-                            .next()
-                            .unwrap(),
+                        base: s.get(*ptr - 1..).unwrap().chars().next().unwrap(),
                     });
-                    // panic!("Unsupported number base");
                 }
             }
         } else {
@@ -536,22 +828,27 @@ impl<'a> TokenTree<'a> {
         };
         loop {
             let ch = s.as_bytes()[*ptr];
-            if (ch != b'_' || underscore_sep) && char::is_digit(ch as _, radix) {
-                *ptr -= underscore_sep as usize;
-                break;
+            match ch {
+                _ if !ch.is_ascii() => break,
+                b'_' if underscore_allowed => {
+                    underscore_allowed = false;
+                }
+                _ if char::is_digit(ch as _, radix) => {
+                    underscore_allowed = true;
+                    num_str.push(ch as _);
+                }
+                _ => break,
             }
-            underscore_sep = ch == b'_';
             *ptr += 1;
         }
-
         if b'.' == s.as_bytes()[*ptr] && {
             let ch = s.get(*ptr + 1..).unwrap().chars().next().unwrap();
             ch.is_ascii_digit()
                 || ch.is_whitespace()
-                || Delimiter::from(ch) != Delimiter::None
-                || ch != '.' && PUNCT_CHARS.contains(&(ch as u8))
+                // || ch != '.' && PUNCT_CHARS.contains(&(ch as u8))
                 || SPECIAL_CHARS.contains(&(ch as u8))
         } {
+            num_str.push('.');
             *ptr += 1;
             if radix != 10 {
                 // panic!("Non decimal floats not supported");
@@ -560,48 +857,146 @@ impl<'a> TokenTree<'a> {
                     base: radix as _,
                 });
             }
-            while s.as_bytes()[*ptr].is_ascii_digit() {
+            underscore_allowed = false;
+            loop {
+                let ch = s.as_bytes()[*ptr];
+                match ch {
+                    _ if !ch.is_ascii() => break,
+                    b'_' if underscore_allowed => {
+                        underscore_allowed = false;
+                    }
+                    _ if char::is_digit(ch as _, radix) => {
+                        underscore_allowed = true;
+                        num_str.push(ch as _);
+                    }
+                    _ => break,
+                }
                 *ptr += 1;
             }
             Ok(NumberLiteral::Float(FloatLiteral {
-                value: { s.get(start..*ptr).unwrap().parse().unwrap() },
+                value: num_str.parse().unwrap(),
                 span: Span::new(path, start, *ptr),
             }))
         } else {
             Ok(NumberLiteral::Int(IntLiteral {
-                value: {
-                    sign * i64::from_str_radix(
-                        s.get(post_sign_start + if radix == 10 { 0 } else { 2 }..*ptr)
-                            .unwrap(),
-                        radix,
-                    )
-                    .unwrap()
-                },
+                value: i64::from_str_radix(&num_str, radix).unwrap(),
                 span: Span::new(path, start, *ptr),
             }))
         }
+        // let start = *ptr;
+        // let sign;
+        // (sign, *ptr) = match s.as_bytes()[start] {
+        //     b'+' => (1, start + 1),
+        //     b'-' => (-1, start + 1),
+        //     _ => (1, start),
+        // };
+        // let post_sign_start = *ptr;
+
+        // let mut underscore_sep = false;
+        // let radix = if s.as_bytes()[post_sign_start] == b'0' {
+        //     *ptr += 2;
+        //     match s.as_bytes()[post_sign_start + 1] {
+        //         b'x' => 16,
+        //         b'o' => 8,
+        //         b'b' => 2,
+        //         b'0'..=b'9' => 10,
+        //         b'_' => {
+        //             underscore_sep = true;
+        //             10
+        //         }
+        //         ch if ch.is_ascii_whitespace()
+        //             || PUNCT_CHARS.contains(&ch)
+        //             || SPECIAL_CHARS.contains(&ch) =>
+        //         {
+        //             *ptr -= 1;
+        //             10
+        //         }
+        //         _ => {
+        //             return Err(LexingError::UnsupportedNumberBase {
+        //                 span: Span::new(
+        //                     path,
+        //                     post_sign_start + 1,
+        //                     s.get(post_sign_start + 1..)
+        //                         .unwrap()
+        //                         .char_indices()
+        //                         .nth(1)
+        //                         .map(|(i, _)| post_sign_start + 1 + i)
+        //                         .unwrap(),
+        //                 ),
+        //                 base: s
+        //                     .get(post_sign_start + 1..)
+        //                     .unwrap()
+        //                     .chars()
+        //                     .next()
+        //                     .unwrap(),
+        //             });
+        //             // panic!("Unsupported number base");
+        //         }
+        //     }
+        // } else {
+        //     10
+        // };
+        // loop {
+        //     let ch = s.as_bytes()[*ptr];
+        //     if (ch != b'_' || underscore_sep) && char::is_digit(ch as _, radix) {
+        //         *ptr -= underscore_sep as usize;
+        //         break;
+        //     }
+        //     underscore_sep = ch == b'_';
+        //     *ptr += 1;
+        // }
+
+        // if b'.' == s.as_bytes()[*ptr] && {
+        //     let ch = s.get(*ptr + 1..).unwrap().chars().next().unwrap();
+        //     ch.is_ascii_digit()
+        //         || ch.is_whitespace()
+        //         || Delimiter::from(ch) != Delimiter::None
+        //         || ch != '.' && PUNCT_CHARS.contains(&(ch as u8))
+        //         || SPECIAL_CHARS.contains(&(ch as u8))
+        // } {
+        //     *ptr += 1;
+        //     if radix != 10 {
+        //         // panic!("Non decimal floats not supported");
+        //         return Err(LexingError::NonDecimalFloat {
+        //             span: Span::new(path, start, *ptr),
+        //             base: radix as _,
+        //         });
+        //     }
+        //     while s.as_bytes()[*ptr].is_ascii_digit() {
+        //         *ptr += 1;
+        //     }
+        //     Ok(NumberLiteral::Float(FloatLiteral {
+        //         value: { s.get(start..*ptr).unwrap().parse().unwrap() },
+        //         span: Span::new(path, start, *ptr),
+        //     }))
+        // } else {
+        //     Ok(NumberLiteral::Int(IntLiteral {
+        //         value: {
+        //             sign * i64::from_str_radix(
+        //                 s.get(post_sign_start + if radix == 10 { 0 } else { 2 }..*ptr)
+        //                     .unwrap(),
+        //                 radix,
+        //             )
+        //             .unwrap()
+        //         },
+        //         span: Span::new(path, start, *ptr),
+        //     }))
+        // }
     }
 
-    fn next_punct(ptr: &mut usize, path: &'a Path, s: &str) -> Result<Punct<'a>, LexingError<'a>> {
+    fn next_punct_str(
+        ptr: &mut usize,
+        path: &'a Path,
+        s: &str,
+    ) -> Result<PunctString<'a>, LexingError<'a>> {
         let start = *ptr;
         while PUNCT_CHARS.contains(&s.as_bytes()[*ptr]) {
             *ptr += 1;
         }
-        let span = Span::new(path, start, *ptr);
-        // println!(
-        //     "Punct: {:?}",
-        //     std::str::from_utf8(&s.as_bytes()[start..*ptr]).unwrap(),
-        // );
-        if let Ok(s) = Ascii7::try_from(&s.as_bytes()[start..*ptr]) {
-            Ok(Punct::Ascii7(Punct7 { punct: s, span }))
-        } else {
-            Ok(Punct::String(PunctString {
-                punct: std::str::from_utf8(&s.as_bytes()[start..*ptr])
-                    .unwrap()
-                    .to_owned(),
-                span,
-            }))
-        }
+        Ok(PunctString {
+            puncts: s.as_bytes()[start..*ptr].to_owned(),
+            span: Span::new(path, start, *ptr),
+        })
     }
 
     fn next_str(
@@ -894,10 +1289,9 @@ impl<'a> TokenTree<'a> {
                     span: Span::new(path, *ptr - 1, *ptr),
                 }))
             }
-            ch if PUNCT_CHARS.contains(&(ch as u8)) => match Self::next_punct(ptr, path, s)? {
-                Punct::Ascii7(punct) => Ok(Some(UngroupedToken::Punct7(punct))),
-                Punct::String(punct) => Ok(Some(UngroupedToken::PunctString(punct))),
-            },
+            ch if PUNCT_CHARS.contains(&(ch as u8)) => Ok(Some(UngroupedToken::PunctString(
+                Self::next_punct_str(ptr, path, s)?,
+            ))),
             _ => Ok(Some(UngroupedToken::Ident(Self::next_ident(ptr, path, s)?))),
         }
     }
