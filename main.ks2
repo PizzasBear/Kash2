@@ -1,12 +1,11 @@
 #(
-    trait Functor: Self[T: type] {
-        map[U: type](self, f: fn(T) U) Self[U]
+    trait Functor: type[type]
+    {
+        fn map[T: type, U: type](self: Self[T], f: fn(T) U) Self[U]
     }
 
-    type array[T: type, N: int] = ..range(N).map(fn(_): T),
-
-    impl Functor for list: Self[T: type] {
-        map[U: type](self, f: fn(T) U) Self[U] {
+    impl Functor for list {
+        fn map[T: type, U: type](self, f: fn(T) U) Self[U] {
             let mut out = []
             for x in self {
                 out.push(x)
@@ -16,9 +15,9 @@
     }
 
     class Cls[A: int] {
-        const if A < 0 {
-        } else {
-        }
+        const if A < 0:
+            2
+        else:
     }
 
     enum Option[T: type] {
@@ -26,13 +25,11 @@
         None
     }
 
-    impl Functor for Option: Self[T: type] {
-        map[U: type](self, f: fn(T) U) Self[U] {
+    impl Functor for Option {
+        fn map[U: type](self, f: fn(T) U) Self[U] {
             match self {
-                Some(x) => {
-                    Some(f(x))
-                }
-                None
+                Some(x): Some(f(x))
+                None: None
             }
         }
     }
@@ -40,17 +37,42 @@
     fn main() {
         if check(): println("Hello World") else: println("Go Bye Bye")
     }
+
+    fn f(T: type) type { T }
+    fn create_f[T: type]() f(T) {}
+    fn g[T: type](x: f(T)) T {
+        ...
+    }
+    fn h() {
+        let x = create_f()
+        let y: int = g(x)
+    }
 )#
 
 # "\xde"
 # a < i + j > k > (3) > 5
 
-# return if x < 0: 0 elif x < 1: x * x else: x
-{
-    a, b, = 1, 2,
-    if a < b {
-        println("a is the best")
-    } else {
-        println("The world is evil")
+#(
+    struct Result[T: type, E: type] {
+        Ok(T),
+        Err(E),
     }
+
+    fn f(x: int) int: x * f(x - 1)
+
+    override fn f(x: 0): 1
+
+    return if x < 0: 0 else if x < 1: x * x else: x
+)#
+
+{
+    let mut a, mut b = 0, 0
+    let (): () = ()
+    () = () = ()
+    a, b, = 1, 2
+    blk: if a < b {
+        println("a is the best")
+    } else if a == b:
+        println("The world is evil")
+    else: println("b is ok")
 }

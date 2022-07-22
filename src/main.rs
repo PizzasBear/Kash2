@@ -47,8 +47,14 @@ impl<'a> Span<'a> {
         Self {
             start: self.start.min(other.start),
             end: self.end.max(other.end),
-            ..self
+            path: self.path,
         }
+    }
+
+    pub fn unite_with(&mut self, other: Self) {
+        assert_eq!(self.path, other.path);
+        self.start = self.start.min(other.start);
+        self.end = self.start.min(other.end);
     }
 
     pub fn display(self, lines: &[usize], s: &str) {
@@ -225,7 +231,7 @@ fn main() -> io::Result<()> {
             println!("{:#?}", tokens);
             println!(
                 "{:#?}",
-                parser::pub_parse_expr(&mut &*tokens.tokens, &file, &file_lines)
+                parser::pub_parse_expr(&mut parser::Tokens::new(&tokens), &file, &file_lines)
             );
         }
         _ => {}

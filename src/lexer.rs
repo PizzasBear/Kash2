@@ -68,14 +68,14 @@ struct PunctString<'a> {
 //     Ascii7(Punct7<'a>),
 // }
 
-pub const PUNCT_CHARS: &'static [u8] = &[
+pub const PUNCT_CHARS: &[u8] = &[
     b'+', b'-', b'*', b'/', b'%', b'<', b'>', // math ops
     b'!', b'^', b'&', b'|', // bool & bit ops
     b'=', b'.', b';', b',', // general ops
     b'@', b'#', b'$', b':', b'?', b'`', b'~', b'\\', // reserved puncts
 ];
 
-pub const SPECIAL_CHARS: &'static [u8] = &[b'(', b')', b'[', b']', b'{', b'}', b'\"', b'\''];
+pub const SPECIAL_CHARS: &[u8] = &[b'(', b')', b'[', b']', b'{', b'}', b'\"', b'\''];
 
 pub struct StrLiteral<'a> {
     pub value: String,
@@ -225,15 +225,30 @@ impl<'a> fmt::Debug for NewLine<'a> {
 }
 
 pub mod pat {
-    macro_rules! new_line {
+    macro_rules! newline {
         () => {
             $crate::lexer::TokenTree::NewLine(_)
         };
         (_) => {
-            $crate::lexer::pat::new_line!()
+            $crate::lexer::pat::newline!()
         };
         ({ $($tt:tt)+ }) => {
             $crate::lexer::TokenTree::NewLine($crate::lexer::NewLine { $($tt)+ })
+        };
+        (($name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::NewLine($name @ $crate::lexer::NewLine { $($tt)+ })
+        };
+        ((mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::NewLine(mut $name @ $crate::lexer::NewLine { $($tt)+ })
+        };
+        ((ref $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::NewLine(ref $name @ $crate::lexer::NewLine { $($tt)+ })
+        };
+        ((ref mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::NewLine(ref mut $name @ $crate::lexer::NewLine { $($tt)+ })
+        };
+        (($pat:pat)) => {
+            $crate::lexer::TokenTree::NewLine($pat)
         };
     }
     macro_rules! punct {
@@ -258,6 +273,21 @@ pub mod pat {
         ([ $($tt:tt)|+ ]) => {
             $($crate::lexer::pat::punct!($tt))|+
         };
+        (($name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Punct($name @ $crate::lexer::Punct { $($tt)+ })
+        };
+        ((mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Punct(mut $name @ $crate::lexer::Punct { $($tt)+ })
+        };
+        ((ref $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Punct(ref $name @ $crate::lexer::Punct { $($tt)+ })
+        };
+        ((ref mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Punct(ref mut $name @ $crate::lexer::Punct { $($tt)+ })
+        };
+        (($pat:pat)) => {
+            $crate::lexer::TokenTree::Punct($pat)
+        };
     }
     macro_rules! ident {
         () => {
@@ -274,6 +304,21 @@ pub mod pat {
         };
         ([ $($tt:tt)|+ ]) => {
             $($crate::lexer::pat::ident!($tt))|+
+        };
+        (($name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Ident($name @ $crate::lexer::Ident { $($tt)+ })
+        };
+        ((mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Ident(mut $name @ $crate::lexer::Ident { $($tt)+ })
+        };
+        ((ref $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Ident(ref $name @ $crate::lexer::Ident { $($tt)+ })
+        };
+        ((ref mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Ident(ref mut $name @ $crate::lexer::Ident { $($tt)+ })
+        };
+        (($pat:pat)) => {
+            $crate::lexer::TokenTree::Ident($pat)
         };
     }
     macro_rules! int {
@@ -292,6 +337,21 @@ pub mod pat {
         ([ $($tt:tt)|+ ]) => {
             $($crate::lexer::pat::int!($tt))|+
         };
+        (($name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::IntLiteral($name @ $crate::lexer::IntLiteral { $($tt)+ })
+        };
+        ((mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::IntLiteral(mut $name @ $crate::lexer::IntLiteral { $($tt)+ })
+        };
+        ((ref $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::IntLiteral(ref $name @ $crate::lexer::IntLiteral { $($tt)+ })
+        };
+        ((ref mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::IntLiteral(ref mut $name @ $crate::lexer::IntLiteral { $($tt)+ })
+        };
+        (($pat:pat)) => {
+            $crate::lexer::TokenTree::IntLiteral($pat)
+        };
     }
     macro_rules! float {
         () => {
@@ -308,6 +368,21 @@ pub mod pat {
         };
         ([ $($tt:tt)|+ ]) => {
             $($crate::lexer::pat::float!($tt))|+
+        };
+        (($name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::FloatLiteral($name @ $crate::lexer::FloatLiteral { $($tt)+ })
+        };
+        ((mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::FloatLiteral(mut $name @ $crate::lexer::FloatLiteral { $($tt)+ })
+        };
+        ((ref $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::FloatLiteral(ref $name @ $crate::lexer::FloatLiteral { $($tt)+ })
+        };
+        ((ref mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::FloatLiteral(ref mut $name @ $crate::lexer::FloatLiteral { $($tt)+ })
+        };
+        (($pat:pat)) => {
+            $crate::lexer::TokenTree::FloatLiteral($pat)
         };
     }
     macro_rules! str {
@@ -326,6 +401,21 @@ pub mod pat {
         ([ $($tt:tt)|+ ]) => {
             $($crate::lexer::pat::str!($tt))|+
         };
+        (($name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::StrLiteral($name @ $crate::lexer::StrLiteral { $($tt)+ })
+        };
+        ((mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::StrLiteral(mut $name @ $crate::lexer::StrLiteral { $($tt)+ })
+        };
+        ((ref $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::StrLiteral(ref $name @ $crate::lexer::StrLiteral { $($tt)+ })
+        };
+        ((ref mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::StrLiteral(ref mut $name @ $crate::lexer::StrLiteral { $($tt)+ })
+        };
+        (($pat:pat)) => {
+            $crate::lexer::TokenTree::StrLiteral($pat)
+        };
     }
     macro_rules! group {
         () => {
@@ -343,13 +433,28 @@ pub mod pat {
         ([ $($tt:tt)|+ ]) => {
             $($crate::lexer::pat::group!($tt))|+
         };
+        (($name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Group($name @ $crate::lexer::Group { $($tt)+ })
+        };
+        ((mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Group(mut $name @ $crate::lexer::Group { $($tt)+ })
+        };
+        ((ref $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Group(ref $name @ $crate::lexer::Group { $($tt)+ })
+        };
+        ((ref mut $name:ident @ { $($tt:tt)+ })) => {
+            $crate::lexer::TokenTree::Group(ref mut $name @ $crate::lexer::Group { $($tt)+ })
+        };
+        (($pat:pat)) => {
+            $crate::lexer::TokenTree::Group($pat)
+        };
     }
     macro_rules! token {
         (_) => {
             _
         };
-        (new_line $(: $tt:tt)?) => {
-            $crate::lexer::pat::new_line!($($tt)?)
+        (newline $(: $tt:tt)?) => {
+            $crate::lexer::pat::newline!($($tt)?)
         };
         (punct $(: $tt:tt)?) => {
             $crate::lexer::pat::punct!($($tt)?)
@@ -372,7 +477,7 @@ pub mod pat {
         (multi: [ $($name:ident $(: $tt:tt)?)|+ ]) => {
             $($crate::lexer::pat::token!($name $(: $tt)?))|+
         };
-        (pat: ($pat:pat)) => {
+        (($pat:pat)) => {
             $pat
         };
     }
@@ -381,27 +486,47 @@ pub mod pat {
             $crate::lexer::pat::tokens![$($type $(:$token)?),*]
         };
         ($($type:ident $(:$token:tt)?),*) => {
-            &[$($crate::lexer::pat::token![$type $(:$token)?]),*]
+            &[$($crate::lexer::pat::token!($type $(:$token)?)),*]
         };
     }
     macro_rules! puncts {
-        ($($punct:tt,)*) => {
-            $crate::lexer::pat::puncts![$($punct),*]
+        ($($tt:tt,)*) => {
+            $crate::lexer::pat::puncts![$($tt),*]
         };
-        ($($punct:tt),*) => {
-            &[$($crate::lexer::pat::punct![$punct]),*]
+        ($($tt:tt),*) => {
+            &[$($crate::lexer::pat::punct!($tt)),*]
         };
     }
-    macro_rules! new_lines {
-        ($($punct:tt,)*) => {
-            $crate::lexer::pat::new_lines![$($punct),*]
+    macro_rules! idents {
+        ($($tt:tt,)*) => {
+            $crate::lexer::pat::idents![$($tt),*]
         };
-        ($($punct:tt),*) => {
-            &[$($crate::lexer::pat::new_line![$punct]),*]
+        ($($tt:tt),*) => {
+            &[$($crate::lexer::pat::ident!($tt)),*]
+        };
+    }
+    macro_rules! groups {
+        ($($tt:tt,)*) => {
+            $crate::lexer::pat::groups![$($tt),*]
+        };
+        ($($tt:tt),*) => {
+            &[$($crate::lexer::pat::group!($tt)),*]
+        };
+    }
+    macro_rules! newlines {
+        () => {
+            &[]
+        };
+        ($($tt:tt,)*) => {
+            $crate::lexer::pat::newlines![$($tt),*]
+        };
+        ($($tt:tt),*) => {
+            &[$($crate::lexer::pat::newline!($tt)),*]
         };
     }
     pub(crate) use {
-        float, group, ident, int, new_line, new_lines, punct, puncts, str, token, tokens,
+        float, group, groups, ident, idents, int, newline, newlines, punct, puncts, str, token,
+        tokens,
     };
 }
 
@@ -582,16 +707,16 @@ impl<'a> Group<'a> {
                     tokens.pop();
                     tokens.pop();
                 }
-                (Some(TokenTree::Punct(_)), TokenTree::Punct(Punct { ch: b';', span })) => {
-                    tokens.push(TokenTree::Punct(Punct::end(Span {
-                        end: span.start,
-                        ..span
-                    })));
-                    tokens.push(TokenTree::NewLine(NewLine { span }));
-                }
-                (_, TokenTree::Punct(Punct { ch: b';', span })) => {
-                    tokens.push(TokenTree::NewLine(NewLine { span }));
-                }
+                // (Some(TokenTree::Punct(_)), TokenTree::Punct(Punct { ch: b';', span })) => {
+                //     tokens.push(TokenTree::Punct(Punct::end(Span {
+                //         end: span.start,
+                //         ..span
+                //     })));
+                //     tokens.push(TokenTree::NewLine(NewLine { span }));
+                // }
+                // (_, TokenTree::Punct(Punct { ch: b';', span })) => {
+                //     tokens.push(TokenTree::NewLine(NewLine { span }));
+                // }
                 (
                     Some(TokenTree::Punct(_)),
                     token @ TokenTree::Punct(Punct { ch: Punct::END, .. }),

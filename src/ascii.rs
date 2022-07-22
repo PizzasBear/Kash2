@@ -226,7 +226,7 @@ impl ops::Deref for Ascii7 {
 
     #[inline]
     fn deref(&self) -> &str {
-        unsafe { str::from_utf8_unchecked(&self.chars.get_unchecked(..self.len as usize)) }
+        unsafe { str::from_utf8_unchecked(self.chars.get_unchecked(..self.len as usize)) }
     }
 }
 
