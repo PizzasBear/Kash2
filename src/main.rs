@@ -2,6 +2,9 @@ pub mod ascii;
 pub mod cache_hash;
 pub mod lexer;
 pub mod parser;
+pub mod parser2;
+pub mod parser_old;
+pub mod parserlib;
 
 use clap::{Arg, Command};
 use crossterm::style::Stylize;
@@ -55,6 +58,19 @@ impl<'a> Span<'a> {
         assert_eq!(self.path, other.path);
         self.start = self.start.min(other.start);
         self.end = self.start.min(other.end);
+    }
+
+    pub fn try_union(self, other: Option<Self>) -> Self {
+        match other {
+            Some(other) => self.union(other),
+            None => self,
+        }
+    }
+
+    pub fn try_unite_with(&mut self, other: Option<Self>) {
+        if let Some(other) = other {
+            self.unite_with(other);
+        }
     }
 
     pub fn display(self, lines: &[usize], s: &str) {
@@ -153,6 +169,10 @@ impl<'a> fmt::Debug for Span<'a> {
     }
 }
 
+pub trait Spanned<'a> {
+    fn span(&self) -> Span<'a>;
+}
+
 struct ShowSpan<'a> {
     span: Span<'a>,
     lines: &'a [usize],
@@ -207,6 +227,13 @@ fn main() -> io::Result<()> {
                 .index(1)))
         .get_matches();
 
+    // match parser2::TUPLING_EXPR {
+    //     parser2::Module::NamedModule { module, .. } => {
+    //         println!("{:#}", module);
+    //     }
+    //     _ => unreachable!(),
+    // }
+
     match matches.subcommand() {
         Some(("run", sub_m)) => {
             let script = sub_m.value_of("SCRIPT").unwrap();
@@ -229,9 +256,31 @@ fn main() -> io::Result<()> {
             };
             tokens.post_process();
             println!("{:#?}", tokens);
+            {
+                let expr = match parserlib::Parser::parse(
+                    &parser::TuplingExprParser {
+                        ignore_newline: false,
+                    },
+                    &mut parser_old::Tokens::new(&tokens),
+                ) {
+                    Ok(out) => out,
+                    Err(err) => {
+                        for span in err.spans() {
+                            span.display(&file_lines, &file);
+                        }
+                        panic!("Failed to parse expression with error: {err}");
+                    }
+                };
+                println!("{expr:#?}");
+            }
+
             println!(
                 "{:#?}",
-                parser::pub_parse_expr(&mut parser::Tokens::new(&tokens), &file, &file_lines)
+                parser_old::pub_parse_expr(
+                    &mut parser_old::Tokens::new(&tokens),
+                    &file,
+                    &file_lines
+                )
             );
         }
         _ => {}

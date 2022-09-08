@@ -1,17 +1,24 @@
 #(
-    trait Functor: type[type]
+    trait[T] Functor
     {
-        fn map[T: type, U: type](self: Self[T], f: fn(T) U) Self[U]
+        fn map[U](self, f: fn(T) U) Self[U]
     }
 
-    impl Functor for list {
-        fn map[T: type, U: type](self, f: fn(T) U) Self[U] {
+    impl Functor for[T] list[T]
+    {
+        fn map[U](self, f: fn(T) U) Self[U] {
             let mut out = []
             for x in self {
                 out.push(x)
             }
             out
         }
+    }
+
+    class MetaFunctor[F[_]: Functor] {
+    }
+
+    impl[const N: int] Functor for[T] array[T, N] {
     }
 
     class Cls[A: int] {

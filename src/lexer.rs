@@ -89,7 +89,7 @@ impl<'a> fmt::Debug for StrLiteral<'a> {
 }
 
 pub struct IntLiteral<'a> {
-    pub value: i64,
+    pub value: u64,
     pub span: Span<'a>,
 }
 
@@ -928,7 +928,7 @@ impl<'a> TokenTree<'a> {
                 {
                     *ptr -= 1;
                     return Ok(NumberLiteral::Int(IntLiteral {
-                        value: i64::from_str_radix(&num_str, 10).unwrap(),
+                        value: u64::from_str_radix(&num_str, 10).unwrap(),
                         span: Span::new(path, start, *ptr),
                     }));
                 }
@@ -1004,7 +1004,7 @@ impl<'a> TokenTree<'a> {
             }))
         } else {
             Ok(NumberLiteral::Int(IntLiteral {
-                value: i64::from_str_radix(&num_str, radix).unwrap(),
+                value: u64::from_str_radix(&num_str, radix).unwrap(),
                 span: Span::new(path, start, *ptr),
             }))
         }
@@ -1392,14 +1392,14 @@ impl<'a> TokenTree<'a> {
                     },
                 }
             }
-            '-' | '+' if matches!(s.as_bytes()[*ptr + 1], b'0'..=b'9') => {
-                Ok(Some(match Self::next_num(ptr, path, s)? {
-                    NumberLiteral::Int(int_literal) => UngroupedToken::IntLiteral(int_literal),
-                    NumberLiteral::Float(float_literal) => {
-                        UngroupedToken::FloatLiteral(float_literal)
-                    }
-                }))
-            }
+            // '-' | '+' if matches!(s.as_bytes()[*ptr + 1], b'0'..=b'9') => {
+            //     Ok(Some(match Self::next_num(ptr, path, s)? {
+            //         NumberLiteral::Int(int_literal) => UngroupedToken::IntLiteral(int_literal),
+            //         NumberLiteral::Float(float_literal) => {
+            //             UngroupedToken::FloatLiteral(float_literal)
+            //         }
+            //     }))
+            // }
             ch if Delimiter::is_opening(ch) => {
                 *ptr += 1;
                 Ok(Some(UngroupedToken::OpenGroup {
