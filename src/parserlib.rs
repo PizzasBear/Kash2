@@ -1,4 +1,5 @@
 use crate::{
+    container::{self, Container, ContainerMask},
     lexer::{self, Delimiter},
     parser_old::Tokens,
     Span, Spanned,
@@ -11,10 +12,22 @@ pub const KEYWORDS: &[&str] = &[
 ];
 
 pub enum ParseError<'a> {
-    Unexpected { name: &'static str, span: Span<'a> },
-    ExpectedDyn { name: String, span: Span<'a> },
-    ExpectedMatchParser { parser: MatchParser, span: Span<'a> },
-    Expected { name: &'static str, span: Span<'a> },
+    Unexpected {
+        name: &'static str,
+        span: Span<'a>,
+    },
+    ExpectedDyn {
+        name: String,
+        span: Span<'a>,
+    },
+    ExpectedMatchParser {
+        parser: MatchParser<'static, container::Owned>,
+        span: Span<'a>,
+    },
+    Expected {
+        name: &'static str,
+        span: Span<'a>,
+    },
     Multi(Vec<Self>),
 }
 
@@ -48,7 +61,10 @@ impl<'a> Spanned<'a> for ParseError<'a> {
 
 impl<'a> fmt::Display for ParseError<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn write_match_parser(f: &mut fmt::Formatter<'_>, parser: &MatchParser) -> fmt::Result {
+        fn write_match_parser<'a, C: crate::container::ContainerMask<'a>>(
+            f: &mut fmt::Formatter<'_>,
+            parser: &MatchParser<'a, C>,
+        ) -> fmt::Result {
             match *parser {
                 MatchParser::Empty => write!(f, "nothing"),
                 MatchParser::SkipWhitespace { skip_newline } => write!(
@@ -64,19 +80,20 @@ impl<'a> fmt::Display for ParseError<'a> {
                 MatchParser::Punct(punct) => write!(
                     f,
                     "the punct {}",
-                    std::str::from_utf8(punct).expect("found out that punct isn't utf-8")
+                    std::str::from_utf8(&*punct).expect("found out that punct isn't utf-8")
                 ),
                 MatchParser::Int(x) => write!(f, "the integer {x}"),
                 MatchParser::Float(x) => {
                     write!(f, "the floating point number {x}")
                 }
-                MatchParser::Str(s) => write!(f, "the string {s:?}"),
-                MatchParser::Keyword(kw) => write!(f, "the keyword `{kw}`"),
+                MatchParser::Str(s) => write!(f, "the string {:?}", &*s),
+                MatchParser::Keyword(kw) => write!(f, "the keyword `{}`", &*kw),
                 MatchParser::Group(delim, parser) => {
                     write!(f, "a group deliminated by {delim:?} containing ")?;
-                    write_match_parser(f, parser)
+                    write_match_parser(f, &*parser)
                 }
                 MatchParser::Parsers(parsers) => {
+                    let parsers = &*parsers;
                     if let Some((head, tail)) = parsers.split_first() {
                         write!(f, "a sequence of [")?;
                         write_match_parser(f, head)?;
@@ -403,18 +420,39 @@ def_multiparser!(0 MultiParser14, MultiParserValue14: T0, T1, T2, T3, T4, T5, T6
 def_multiparser!(0 MultiParser15, MultiParserValue15: T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
 def_multiparser!(0 MultiParser16, MultiParserValue16: T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15);
 
-#[derive(Debug, Clone, Copy)]
-pub enum MatchParser {
+#[derive(Debug, Clone)]
+pub enum MatchParser<'a, M: ContainerMask<'a>> {
     Empty,
     Newline,
     SkipWhitespace { skip_newline: bool },
-    Parsers(&'static [Self]),
-    Punct(&'static [u8]),
-    Keyword(&'static str),
-    Str(&'static str),
+    Parsers(Container<'a, M, [Self]>),
+    Punct(Container<'a, M, [u8]>),
+    Keyword(Container<'a, M, str>),
+    Str(Container<'a, M, str>),
     Int(u64),
     Float(f64),
-    Group(Delimiter, &'static Self),
+    Group(Delimiter, Container<'a, M, Self>),
+}
+
+impl<'a, M: ContainerMask<'a>> MatchParser<'a, M> {
+    pub fn into_owned(&self) -> MatchParser<'static, container::Owned> {
+        match *self {
+            Self::Empty => MatchParser::Empty,
+            Self::Newline => MatchParser::Newline,
+            Self::SkipWhitespace { skip_newline } => MatchParser::SkipWhitespace { skip_newline },
+            Self::Parsers(parsers) => MatchParser::Parsers(container::make_owned(
+                parsers.iter().map(|x| x.into_owned()).collect(),
+            )),
+            Self::Punct(punct) => MatchParser::Punct(punct.into_owned()),
+            Self::Keyword(keyword) => MatchParser::Keyword(keyword.into_owned()),
+            Self::Str(s) => MatchParser::Str(s.into_owned()),
+            Self::Int(x) => MatchParser::Int(x),
+            Self::Float(x) => MatchParser::Float(x),
+            Self::Group(delim, group) => {
+                MatchParser::Group(delim, container::make_owned((*group).into_owned()))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -427,7 +465,7 @@ impl<'a> Spanned<'a> for MatchValue<'a> {
     }
 }
 
-impl<'a> Parser<'a> for MatchParser {
+impl<'a, C: ContainerMask<'a>> Parser<'a> for MatchParser<'a, C> {
     type Output = MatchValue<'a>;
 
     fn parse(&self, tokens: &mut Tokens<'a, '_>) -> Result<Self::Output, ParseError<'a>> {
@@ -444,13 +482,13 @@ impl<'a> Parser<'a> for MatchParser {
                 Some(token) => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: token.span().begining(),
-                        parser: *self,
+                        parser: self.into(),
                     })
                 }
                 None => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: inner_tokens.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
             },
@@ -460,14 +498,14 @@ impl<'a> Parser<'a> for MatchParser {
                     .map(|x| x.span())
                     .unwrap_or(inner_tokens.span())
                     .begining();
-                for &ch in punct {
+                for &ch in &*punct {
                     match inner_tokens.pop_first() {
                         Some(&lexer::pat::punct!({ ch: tk_ch, span })) if ch == tk_ch => {
                             mod_span.unite_with(span);
                         }
                         _ => {
                             return Err(ParseError::ExpectedMatchParser {
-                                parser: *self,
+                                parser: self.into_owned(),
                                 span: mod_span.begining(),
                             })
                         }
@@ -495,43 +533,43 @@ impl<'a> Parser<'a> for MatchParser {
                 Some(token) => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: token.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
                 None => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: inner_tokens.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
             },
             MatchParser::Keyword(kw) => match inner_tokens.pop_first() {
-                Some(&lexer::pat::ident!({ ref name, span })) if name == kw => MatchValue(span),
+                Some(&lexer::pat::ident!({ ref name, span })) if name == &*kw => MatchValue(span),
                 Some(token) => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: token.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
                 None => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: inner_tokens.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
             },
             MatchParser::Str(s) => match inner_tokens.pop_first() {
-                Some(&lexer::pat::str!({ ref value, span })) if value == s => MatchValue(span),
+                Some(&lexer::pat::str!({ ref value, span })) if value == &*s => MatchValue(span),
                 Some(token) => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: token.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
                 None => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: inner_tokens.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
             },
@@ -540,13 +578,13 @@ impl<'a> Parser<'a> for MatchParser {
                 Some(token) => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: token.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
                 None => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: inner_tokens.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
             },
@@ -555,13 +593,13 @@ impl<'a> Parser<'a> for MatchParser {
                 Some(token) => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: token.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
                 None => {
                     return Err(ParseError::ExpectedMatchParser {
                         span: inner_tokens.span().begining(),
-                        parser: *self,
+                        parser: self.into_owned(),
                     })
                 }
             },
