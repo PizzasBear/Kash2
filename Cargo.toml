@@ -1,12 +1,2 @@
-[package]
-name = "kash2"
-version = "0.1.0"
-authors = ["max <mx.sht06@gmail.com>"]
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-crossterm = "0.24"
-clap = "3.1"
-anyhow = "1.0"
+[workspace]
+members = ["kash2", "kash2-derive"]

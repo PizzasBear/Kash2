@@ -1,16 +1,18 @@
 pub mod ascii;
 pub mod cache_hash;
-mod container;
 pub mod lexer;
+pub mod lexer2;
 pub mod parser;
 pub mod parser2;
-pub mod parser_old;
-pub mod parserlib;
+// mod container;
+// pub mod parser;
+// pub mod parser2;
+// pub mod parserlib;
 
 use clap::{Arg, Command};
 use crossterm::style::Stylize;
 use lexer::TokenTree;
-use std::{fmt, fs, io, path::Path, str};
+use std::{fmt, fs, path::Path, str, sync::Arc};
 // use crossterm::style::Stylize;
 // use std::io::{self, Write};
 // use std::mem;
@@ -215,7 +217,7 @@ pub fn lines(s: &str) -> Vec<usize> {
         .collect()
 }
 
-fn main() -> io::Result<()> {
+fn main() -> anyhow::Result<()> {
     let matches = Command::new("Kash 2")
         .version("indev")
         .about("This is a shell language with the goal of making complex actions simpler to read, yet quick to write.")
@@ -237,8 +239,8 @@ fn main() -> io::Result<()> {
 
     match matches.subcommand() {
         Some(("run", sub_m)) => {
-            let script = sub_m.value_of("SCRIPT").unwrap();
-            let path = Path::new(script);
+            let script: &String = sub_m.get_one("SCRIPT").unwrap();
+            let path = Path::new(&script);
             let file = fs::read_to_string(path)
                 .unwrap_or_else(|_| panic!("File `{}` not found", path.display()))
                 + "\n";
@@ -257,32 +259,38 @@ fn main() -> io::Result<()> {
             };
             tokens.post_process();
             println!("{:#?}", tokens);
-            {
-                let expr = match parserlib::Parser::parse(
-                    &parser::TuplingExprParser {
-                        ignore_newline: false,
-                    },
-                    &mut parser_old::Tokens::new(&tokens),
-                ) {
-                    Ok(out) => out,
-                    Err(err) => {
-                        for span in err.spans() {
-                            span.display(&file_lines, &file);
-                        }
-                        panic!("Failed to parse expression with error: {err}");
-                    }
-                };
-                println!("{expr:#?}");
+            match lexer2::parse_file(Arc::new(path.to_owned()), &file) {
+                Ok(tokens) => println!("{tokens:#?}"),
+                Err(err) => println!("{err}"),
             }
 
-            println!(
-                "{:#?}",
-                parser_old::pub_parse_expr(
-                    &mut parser_old::Tokens::new(&tokens),
-                    &file,
-                    &file_lines
-                )
-            );
+            // println!("{:#?}", lexer2::Token::lexer(&file).collect::<Vec<_>>());
+            //{
+            //    let expr = match parserlib::Parser::parse(
+            //        &parser::TuplingExprParser {
+            //            ignore_newline: false,
+            //        },
+            //        &mut parser_old::Tokens::new(&tokens),
+            //    ) {
+            //        Ok(out) => out,
+            //        Err(err) => {
+            //            for span in err.spans() {
+            //                span.display(&file_lines, &file);
+            //            }
+            //            panic!("Failed to parse expression with error: {err}");
+            //        }
+            //    };
+            //    println!("{expr:#?}");
+            //}
+
+            // println!(
+            //     "{:#?}",
+            //     parser_old::pub_parse_expr(
+            //         &mut parser_old::Tokens::new(&tokens),
+            //         &file,
+            //         &file_lines
+            //     )
+            // );
         }
         _ => {}
     }
