@@ -752,8 +752,28 @@ impl ToTokens for Match {
 }
 
 struct Mamamia {
-    exprs: Vec<(Match, syn::Expr, Option<Token![,]>)>,
+    tokens_ident: Ident,
+    comma: Token![,],
+    exprs: Vec<(VectorMatch, syn::Expr, Option<Token![,]>)>,
     else_arm: Option<(syn::Pat, syn::Expr)>,
+}
+
+impl Parse for Mamamia {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        input.step(|cursor| {
+            cursor
+                .ident()
+                .and_then(|(ident, rest)| match ident.to_string().as_str() {
+                    "tokens" => Some((ident, rest)),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    cursor.error("expected a named type (one of {:?} or a parenthesised expresion)")
+                })
+        })?;
+
+        todo!()
+    }
 }
 
 #[proc_macro]
