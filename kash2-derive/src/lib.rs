@@ -4,6 +4,7 @@ use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream};
 use quote::{quote, ToTokens};
 use std::ops;
 use syn::{
+    braced,
     ext::IdentExt,
     parenthesized,
     parse::{Parse, ParseStream},
@@ -515,7 +516,7 @@ impl ToTokens for NamedMatch {
                     });
                 }
             }),
-            NamedType::Int(_) => tokens.extend(quote! {
+            NamedType::Int(_) => tokens.extend(quote! { {
                 if let (#Lexer2::Token::Literal(#Lexer2::Literal::Int(n)), rest) =
                     tokens
                         .take_split_first()
@@ -530,7 +531,7 @@ impl ToTokens for NamedMatch {
                         span: tokens.span().beginning(),
                     });
                 }
-            }),
+            } }),
             NamedType::Float(_) => tokens.extend(quote! {
                 if let (#Lexer2::Token::Literal(#Lexer2::Literal::Float(x)), rest) =
                     tokens
@@ -637,14 +638,12 @@ impl ToTokens for SpannedMatch {
 
                     #content
                 },
-                {
-                    match __tokens_stack.first() {
-                        Some(first_token) => first_token
-                            .span()
-                            .join(__tokens_stack[__tokens_stack.len() - tokens.len() - 1].span())
-                            .unwrap(),
-                        None => tokens.span().beginning(),
-                    }
+                match __tokens_stack.first() {
+                    Some(first_token) => first_token
+                        .span()
+                        .join(__tokens_stack[__tokens_stack.len() - tokens.len() - 1].span())
+                        .unwrap(),
+                    None => tokens.span().beginning(),
                 },
             )
         } });
@@ -751,39 +750,108 @@ impl ToTokens for Match {
     }
 }
 
+#[derive(Debug)]
 struct Mamamia {
     tokens_ident: Ident,
-    comma: Token![,],
-    exprs: Vec<(VectorMatch, syn::Expr, Option<Token![,]>)>,
-    else_arm: Option<(syn::Pat, syn::Expr)>,
+    brace: token::Brace,
+    exprs: Vec<(VectorMatch, Token![=>], syn::Expr, Token![,])>,
+    else_arm: Option<(Token![else], syn::Pat, Token![=>], syn::Expr)>,
 }
 
 impl Parse for Mamamia {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        input.step(|cursor| {
-            cursor
-                .ident()
-                .and_then(|(ident, rest)| match ident.to_string().as_str() {
-                    "tokens" => Some((ident, rest)),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    cursor.error("expected a named type (one of {:?} or a parenthesised expresion)")
-                })
-        })?;
+        let content;
+        Ok(Self {
+            tokens_ident: input.step(|cursor| {
+                cursor
+                    .ident()
+                    .and_then(|(ident, rest)| match ident.to_string().as_str() {
+                        "tokens" => Some((ident, rest)),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        cursor.error(
+                            "expected a named type (one of {:?} or a parenthesised expresion)",
+                        )
+                    })
+            })?,
+            brace: braced!(content in input),
+            exprs: {
+                let mut exprs = vec![];
 
-        todo!()
+                while content.peek(Token![$]) {
+                    exprs.push((
+                        content.parse()?,
+                        content.parse()?,
+                        content.parse()?,
+                        content.parse()?,
+                    ));
+                }
+
+                exprs
+            },
+            else_arm: if content.is_empty() {
+                None
+            } else {
+                Some((
+                    content.parse()?,
+                    content.parse()?,
+                    content.parse()?,
+                    content.parse()?,
+                ))
+            },
+        })
+    }
+}
+
+impl ToTokens for Mamamia {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        // struct Mamamia {
+        //     tokens_ident: Ident,
+        //     comma: Token![,],
+        //     exprs: Vec<(VectorMatch, Token![=>], syn::Expr, Option<Token![,]>)>,
+        //     else_arm: Option<(Token![else], syn::Pat, Token![=>], syn::Expr)>,
+        // }
+        let exprs = self.exprs.iter().map(|(vmatch, arrow, expr, comma)| {
+            let pattern = vmatch.pattern();
+            quote! {
+                match (|| {
+                    let __var;
+                    (__var, tokens) = {
+                        let __var = &mut ();
+                        drop(__var);
+
+                        let mut tokens = tokens.clone();
+                        (#vmatch, tokens)
+                    };
+                    Ok(__var)
+                })() {
+                    Ok(#pattern) #arrow break '__mamamia_block Ok(#expr) #comma
+                    Err(err) => err
+                }
+            }
+        });
+        let result = quote! {
+            '__mamamia_block: {
+                Err([ #(#exprs,)* ])
+            }
+        };
+        if let Some((_else_token, pat, arrow, expr)) = &self.else_arm {
+            tokens.extend(quote! {
+                match #result {
+                    Ok(x) => x,
+                    Err(#pat) #arrow #expr,
+                }
+            });
+        } else {
+            tokens.extend(result)
+        }
     }
 }
 
 #[proc_macro]
 pub fn mamamia(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input = parse_macro_input!(input as Match);
+    let input = parse_macro_input!(input as Mamamia);
 
-    proc_macro::TokenStream::from(quote! {
-        use #Lexer2::Spanned;
-        let mut __tokens_stack = ::std::vec::Vec::<#Lexer2::TokensRef>::new();
-        #input
-        drop(__tokens_stack);
-    })
+    proc_macro::TokenStream::from(input.into_token_stream())
 }

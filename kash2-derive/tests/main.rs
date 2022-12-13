@@ -6,16 +6,21 @@ use kash2_derive::mamamia;
 fn parse_int(
     mut tokens: lexer2::TokensRef,
 ) -> parser2::Result<(&lexer2::IntLiteral, lexer2::TokensRef)> {
-    mamamia!(#name:int);
+    let name = mamamia!(tokens {
+        $(#name:int) => name,
+        else [err] => return Err(err)
+    });
     Ok((name, tokens))
 }
 
 fn parse_add(
     mut tokens: lexer2::TokensRef,
 ) -> parser2::Result<((u64, lexer2::Span), lexer2::TokensRef)> {
-    mamamia! {
-        $(#a:(parse_int) + #b:(parse_int))@span;
-    };
+    let (a, b, span) = mamamia!(tokens {
+        $($(#a:(parse_int) + #b:(parse_int))@span;) => (a, b, span),
+        else [err] => return Err(err)
+        // else _ => return Err(parser2::Error::Expected { text: "a thing".into(), span: tokens.span().beginning() })
+    });
 
     println!("({a:?}) + ({b:?}): {}", span.show());
 
