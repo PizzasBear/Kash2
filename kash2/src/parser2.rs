@@ -1,7 +1,5 @@
-use crate::lexer2::{
-    CharLiteral, Delim, FloatLiteral, Group, Ident, IntLiteral, Literal, Punct, Span, Spanned,
-    StrLiteral, Token, TokensRef, TokensVec,
-};
+use crate::lexer2::{Delim, Ident, Literal, Span, Spanned, Token, TokensRef};
+use kash2_derive::mamamia;
 use std::{borrow::Cow, error::Error as StdError, fmt};
 
 #[derive(Debug)]
@@ -31,92 +29,7 @@ impl StdError for Error {}
 
 pub type Result<T, Err = Error> = std::result::Result<T, Err>;
 
-pub enum TokenMatch<'a> {
-    Int,
-    Float,
-    Char,
-    Str,
-    Literal,
-    AnyIdent,
-    Punct(Punct),
-    Ident(&'a str),
-    Group(Delim, &'a [TokenMatch<'a>]),
-}
-
-pub enum MatchValue<'a> {
-    Int(&'a IntLiteral),
-    Float(&'a FloatLiteral),
-    Char(&'a CharLiteral),
-    Str(&'a StrLiteral),
-    Literal(&'a Literal),
-    Ident(&'a Ident),
-    Punct(&'a Punct),
-    IdentMatch(&'a Ident),
-    Group(&'a Group, Vec<MatchValue<'a>>),
-    Many(Vec<MatchValue<'a>>),
-}
-
-impl<'a> TokenMatch<'a> {
-    pub fn parse<'b>(&self, mut tokens: TokensRef<'b>) -> Result<(MatchValue<'b>, TokensRef<'b>)> {
-        let first;
-        (first, tokens) = tokens
-            .take_split_first()
-            .ok_or_else(|| Error::UnexpectedEof {
-                span: tokens.span().clone(),
-            })?;
-        Ok((
-            match (self, first) {
-                (Self::Int, Token::Literal(Literal::Int(lit))) => MatchValue::Int(lit),
-                (Self::Float, Token::Literal(Literal::Float(lit))) => MatchValue::Float(lit),
-                (Self::Char, Token::Literal(Literal::Char(lit))) => MatchValue::Char(lit),
-                (Self::Literal, Token::Literal(lit)) => MatchValue::Literal(lit),
-                (Self::AnyIdent, Token::Ident(ident)) => MatchValue::Ident(ident),
-                (Self::Punct(match_punct), Token::Punct(punct))
-                    if match_punct.ch == punct.punct.ch
-                        && punct.spacing.does_match(&match_punct.spacing) =>
-                {
-                    MatchValue::Punct(punct)
-                }
-                (&Self::Ident(match_ident), Token::Ident(ident)) if match_ident == **ident => {
-                    MatchValue::IdentMatch(ident)
-                }
-                (
-                    Self::Group(match_delim, match_tokens),
-                    Token::Group(group @ Group { delim, tokens }),
-                ) if match_delim == delim => {
-                    let (out, tail) = Self::multiparse(&match_tokens, tokens.as_ref())?;
-                    if !out.is_empty() {
-                        return Err(Error::UnexpectedToken {
-                            token: tokens[match_tokens.len()].clone(),
-                        });
-                    }
-                    MatchValue::Group(group, out)
-                }
-                _ => {
-                    return Err(Error::UnexpectedToken {
-                        token: first.clone(),
-                    })
-                }
-            },
-            tokens,
-        ))
-        // num channel x y z
-    }
-
-    pub fn multiparse<'b>(
-        tk_matches: &[Self],
-        mut tokens: TokensRef<'b>,
-    ) -> Result<(Vec<MatchValue<'b>>, TokensRef<'b>)> {
-        let mut result = Vec::with_capacity(tk_matches.len());
-        for tk_match in tk_matches {
-            let value;
-            (value, tokens) = tk_match.parse(tokens)?;
-            result.push(value);
-        }
-        Ok((result, tokens))
-    }
-}
-
+#[derive(Debug, Clone, Copy)]
 pub enum UniOp {
     Neg,
     Pos,
@@ -126,14 +39,89 @@ pub enum UniOp {
 
 impl UniOp {
     pub fn parse_prefix(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
-        let first;
-        (first, tokens) = tokens
-            .take_split_first()
-            .ok_or_else(|| Error::UnexpectedEof {
-                span: tokens.span().clone(),
-            })?;
+        let val = mamamia!(tokens {
+            $(-) => Self::Neg,
+            $(+) => Self::Pos,
+            $(*) => Self::Deref,
+            $(&) => Self::Ref,
+        })
+        .map_err(|_| Error::Expected {
+            text: "A prefix operator".into(),
+            span: tokens.span().beginning(),
+        })?;
 
-        todo!()
+        Ok((val, tokens))
+    }
+
+    pub fn parse_suffix(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
+        let val = mamamia!(tokens {
+            $(.-) => Self::Neg,
+            $(.+) => Self::Pos,
+            $(.*) => Self::Deref,
+            $(.&) => Self::Ref,
+        })
+        .map_err(|_| Error::Expected {
+            text: "A suffix operator".into(),
+            span: tokens.span().beginning(),
+        })?;
+
+        Ok((val, tokens))
+    }
+}
+
+pub enum DuoOp {
+    Mul,
+    Div,
+    Mod,
+    Add,
+    Sub,
+    Shr,
+    Shl,
+    Rotr,
+    Rotl,
+    Xor,
+    BitAnd,
+    BitOr,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    And,
+    Or,
+}
+
+impl DuoOp {
+    fn parse(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
+        let val = mamamia!(tokens {
+            $(*) => Self::Mul,
+            $(/) => Self::Div,
+            $(%) => Self::Mod,
+            $(+) => Self::Add,
+            $(-) => Self::Sub,
+            $(>>) => Self::Shr,
+            $(<<) => Self::Shl,
+            $(>>>) => Self::Rotr,
+            $(<<<) => Self::Rotl,
+            $(^) => Self::Xor,
+            $(&) => Self::BitAnd,
+            $(|) => Self::BitOr,
+            $(==) => Self::Eq,
+            $(!=) => Self::Neq,
+            $(<) => Self::Lt,
+            $(>) => Self::Gt,
+            $(<=) => Self::Le,
+            $(>=) => Self::Ge,
+            $(&&) => Self::And,
+            $(||) => Self::Or,
+        })
+        .map_err(|_| Error::Expected {
+            text: "a joining operator".into(),
+            span: tokens.span().beginning(),
+        })?;
+
+        Ok((val, tokens))
     }
 }
 
@@ -141,38 +129,55 @@ impl UniOp {
 pub enum Value {
     Literal(Literal),
     Var(Ident),
+    UniOp { op: UniOp, value: Box<Self> },
 }
 
 impl Value {
     pub fn parse_base(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
-        let first;
-        (first, tokens) = tokens
-            .take_split_first()
-            .ok_or_else(|| Error::UnexpectedEof {
-                span: tokens.span().clone(),
-            })?;
-
-        let value = match first {
-            Token::Literal(lit) => Value::Literal(lit.clone()),
-            Token::Ident(ident) => Value::Var(ident.clone()),
-            Token::Group(_group) => todo!(),
-            _ => {
-                return Err(Error::UnexpectedToken {
+        let value = mamamia!(tokens {
+            $(#literal:literal) => Self::Literal(literal.clone()),
+            $(#name:ident) => Self::Var(name.clone()),
+        })
+        .map_err(|_| {
+            tokens.first().map_or_else(
+                || Error::UnexpectedEof {
+                    span: tokens.span().clone(),
+                },
+                |first| Error::UnexpectedToken {
                     token: first.clone(),
-                })
-            }
-        };
+                },
+            )
+        })?;
 
         Ok((value, tokens))
     }
 
-    pub fn parse(tokens: TokensRef) -> Result<(Self, TokensRef)> {
+    pub fn parse(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
         // prefix uni-ops
-        let (first, tokens) = tokens.split_first().ok_or_else(|| Error::UnexpectedEof {
-            span: tokens.span().clone(),
-        })?;
-
-        todo!()
+        let mut prefix_ops = vec![];
+        while let Ok((op, rest)) = UniOp::parse_prefix(tokens.clone()) {
+            prefix_ops.push(op);
+            tokens = rest;
+        }
+        let mut value;
+        (value, tokens) = Self::parse_base(tokens)?;
+        while mamamia!(tokens {
+            $(#op:(UniOp::parse_suffix)) => {
+                value = Self::UniOp {
+                    op,
+                    value: Box::new(value),
+                };
+            },
+        })
+        .is_ok()
+        {}
+        for op in prefix_ops.into_iter().rev() {
+            value = Self::UniOp {
+                op,
+                value: Box::new(value),
+            };
+        }
+        Ok((value, tokens))
     }
 }
 

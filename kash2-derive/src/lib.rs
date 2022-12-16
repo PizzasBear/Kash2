@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream};
+use proc_macro2::{Delimiter, Ident, Punct, Spacing, Span, TokenStream};
 use quote::{quote, ToTokens};
 use std::ops;
 use syn::{
-    braced,
+    braced, bracketed,
     ext::IdentExt,
     parenthesized,
     parse::{Parse, ParseStream},
@@ -14,14 +14,14 @@ use syn::{
 struct Lexer2;
 impl ToTokens for Lexer2 {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.extend(quote!(kash2::lexer2))
+        tokens.extend(quote!(crate::lexer2))
     }
 }
 
 struct Parser2;
 impl ToTokens for Parser2 {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.extend(quote!(kash2::parser2))
+        tokens.extend(quote!(crate::parser2))
     }
 }
 
@@ -412,6 +412,9 @@ enum NamedType {
     Float(Ident),
     Str(Ident),
     Char(Ident),
+    ParenGroup(Ident, token::Paren),
+    BracketGroup(Ident, token::Bracket),
+    BraceGroup(Ident, token::Brace),
     Expr(syn::ExprParen),
 }
 
@@ -431,11 +434,47 @@ impl Parse for NamedType {
                         "float" => Some((Self::Float(ident), rest)),
                         "str" => Some((Self::Str(ident), rest)),
                         "char" => Some((Self::Char(ident), rest)),
+                        "group" => {
+                            if let Some((inside, span, rest)) = rest.group(Delimiter::Parenthesis) {
+                                if inside.eof() {
+                                    Some((
+                                        Self::ParenGroup(ident, syn::token::Paren { span }),
+                                        rest,
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else if let Some((inside, span, rest)) =
+                                rest.group(Delimiter::Bracket)
+                            {
+                                if inside.eof() {
+                                    Some((
+                                        Self::BracketGroup(ident, syn::token::Bracket { span }),
+                                        rest,
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else if let Some((inside, span, rest)) =
+                                rest.group(Delimiter::Parenthesis)
+                            {
+                                if inside.eof() {
+                                    Some((
+                                        Self::BraceGroup(ident, syn::token::Brace { span }),
+                                        rest,
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
                         _ => None,
                     })
                     .ok_or_else(|| {
                         cursor.error(format_args!(
-                            "expected a named type (one of {:?} or a parenthesised expresion)",
+                            "expected a named type (one of [{}] or a parenthesised expresion)",
                             &[
                                 "`ident`",
                                 "`punct`",
@@ -444,7 +483,11 @@ impl Parse for NamedType {
                                 "`float`",
                                 "`str`",
                                 "`char`",
-                            ],
+                                "`group()`",
+                                "`group[]`",
+                                "`group{}`",
+                            ]
+                            .join(", "),
                         ))
                     })
             })
@@ -516,7 +559,7 @@ impl ToTokens for NamedMatch {
                     });
                 }
             }),
-            NamedType::Int(_) => tokens.extend(quote! { {
+            NamedType::Int(_) => tokens.extend(quote! {
                 if let (#Lexer2::Token::Literal(#Lexer2::Literal::Int(n)), rest) =
                     tokens
                         .take_split_first()
@@ -531,7 +574,7 @@ impl ToTokens for NamedMatch {
                         span: tokens.span().beginning(),
                     });
                 }
-            } }),
+            }),
             NamedType::Float(_) => tokens.extend(quote! {
                 if let (#Lexer2::Token::Literal(#Lexer2::Literal::Float(x)), rest) =
                     tokens
@@ -596,13 +639,89 @@ impl ToTokens for NamedMatch {
                     });
                 }
             }),
+            NamedType::ParenGroup(_, _) => tokens.extend(quote! {
+                if let (
+                    #Lexer2::Token::Group(
+                        group @ #Lexer2::Group {
+                            delim: #Lexer2::Delim::Parens,
+                            ..
+                        },
+                    ),
+                    rest,
+                ) = tokens
+                    .take_split_first()
+                    .ok_or_else(|| #Parser2::Error::UnexpectedEof {
+                        span: tokens.span().beginning(),
+                    })?
+                {
+                    tokens = rest;
+                    group
+                } else {
+                    return Err(#Parser2::Error::Expected {
+                        text: "a parenthesis group".into(),
+                        span: tokens.span().beginning(),
+                    });
+                }
+            }),
+            NamedType::BracketGroup(_, _) => tokens.extend(quote! {
+                if let (
+                    #Lexer2::Token::Group(
+                        group @ #Lexer2::Group {
+                            delim: #Lexer2::Delim::Brackets,
+                            ..
+                        },
+                    ),
+                    rest,
+                ) = tokens
+                    .take_split_first()
+                    .ok_or_else(|| #Parser2::Error::UnexpectedEof {
+                        span: tokens.span().beginning(),
+                    })?
+                {
+                    tokens = rest;
+                    group
+                } else {
+                    return Err(#Parser2::Error::Expected {
+                        text: "a bracket group".into(),
+                        span: tokens.span().beginning(),
+                    });
+                }
+            }),
+            NamedType::BraceGroup(_, _) => tokens.extend(quote! {
+                if let (
+                    #Lexer2::Token::Group(
+                        group @ #Lexer2::Group {
+                            delim: #Lexer2::Delim::Braces,
+                            ..
+                        },
+                    ),
+                    rest,
+                ) = tokens
+                    .take_split_first()
+                    .ok_or_else(|| #Parser2::Error::UnexpectedEof {
+                        span: tokens.span().beginning(),
+                    })?
+                {
+                    tokens = rest;
+                    group
+                } else {
+                    return Err(#Parser2::Error::Expected {
+                        text: "a brace group".into(),
+                        span: tokens.span().beginning(),
+                    });
+                }
+            }),
             NamedType::Expr(expr) => tokens.extend(quote! {
                 {
                     let __val;
-                    (__val, tokens) = #expr(tokens)?;
+                    (__val, tokens) = {
+                        let __val = &mut ();
+                        ::std::mem::drop(__val);
+                        #expr(tokens)?
+                    };
 
                     __val
-                };
+                }
             }),
         }
     }
@@ -634,7 +753,7 @@ impl ToTokens for SpannedMatch {
             (
                 {
                     let __tokens_stack = &mut ();
-                    drop(__tokens_stack);
+                    ::std::mem::drop(__tokens_stack);
 
                     #content
                 },
@@ -690,6 +809,133 @@ impl ToTokens for VectorMatch {
             (
                 #(#content,)*
             )
+        });
+    }
+}
+
+enum MatchGroup {
+    Paren {
+        paren: token::Paren,
+        content: Vec<Match>,
+    },
+    Bracket {
+        bracket: token::Bracket,
+        content: Vec<Match>,
+    },
+    Brace {
+        brace: token::Brace,
+        content: Vec<Match>,
+    },
+}
+
+impl MatchGroup {
+    fn content(&self) -> &[Match] {
+        match self {
+            Self::Paren { content, .. } => &content,
+            Self::Bracket { content, .. } => &content,
+            Self::Brace { content, .. } => &content,
+        }
+    }
+
+    fn pattern(&self) -> TokenStream {
+        let content = self.content().iter().map(Match::pattern);
+        quote! {
+            ( #(#content,)* )
+        }
+    }
+}
+
+impl Parse for MatchGroup {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let lookahead = input.lookahead1();
+        if lookahead.peek(token::Paren) {
+            let content;
+            Ok(Self::Paren {
+                paren: parenthesized!(content in input),
+                content: {
+                    let mut vector = vec![];
+                    while !content.is_empty() {
+                        vector.push(content.parse()?);
+                    }
+                    vector
+                },
+            })
+        } else if lookahead.peek(token::Bracket) {
+            let content;
+            Ok(Self::Bracket {
+                bracket: bracketed!(content in input),
+                content: {
+                    let mut vector = vec![];
+                    while !content.is_empty() {
+                        vector.push(content.parse()?);
+                    }
+                    vector
+                },
+            })
+        } else if lookahead.peek(token::Brace) {
+            let content;
+            Ok(Self::Brace {
+                brace: braced!(content in input),
+                content: {
+                    let mut vector = vec![];
+                    while !content.is_empty() {
+                        vector.push(content.parse()?);
+                    }
+                    vector
+                },
+            })
+        } else {
+            Err(lookahead.error())
+        }
+    }
+}
+
+impl ToTokens for MatchGroup {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let content = self.content();
+        let delim: syn::Path = match self {
+            Self::Paren { .. } => syn::parse_quote! {
+                #Lexer2::Delim::Parens
+            },
+            Self::Bracket { .. } => syn::parse_quote! {
+                #Lexer2::Delim::Brackets
+            },
+            Self::Brace { .. } => syn::parse_quote! {
+                #Lexer2::Delim::Braces
+            },
+        };
+        tokens.extend(quote! {
+            if let (
+                #Lexer2::Token::Group(
+                    #Lexer2::Group {
+                        delim: #delim,
+                        tokens: __group_tokens,
+                    },
+                ),
+                __rest,
+            ) = tokens
+                .take_split_first()
+                .ok_or_else(|| #Parser2::Error::UnexpectedEof {
+                    span: tokens.span().beginning(),
+                })?
+            {
+                let x = {
+                    let mut tokens = __group_tokens;
+                    let x = ( #(#content,)* );
+                    if let Some(token) = tokens.first() {
+                        return Err(#Parser2::Error::UnexpectedToken { token });
+                    } else {
+                        x
+                    }
+                };
+                tokens = __rest;
+                x
+            } else {
+                return Err(#Parser2::Error::Expected {
+                    text: "a parenthesis group".into(),
+                    span: tokens.span().beginning(),
+                });
+            }
         });
     }
 }
@@ -815,11 +1061,11 @@ impl ToTokens for Mamamia {
         let exprs = self.exprs.iter().map(|(vmatch, arrow, expr, comma)| {
             let pattern = vmatch.pattern();
             quote! {
-                match (|| {
+                match (|| -> crate::parser2::Result<_> {
                     let __var;
                     (__var, tokens) = {
                         let __var = &mut ();
-                        drop(__var);
+                        ::std::mem::drop(__var);
 
                         let mut tokens = tokens.clone();
                         (#vmatch, tokens)
@@ -833,6 +1079,7 @@ impl ToTokens for Mamamia {
         });
         let result = quote! {
             '__mamamia_block: {
+                use #Lexer2::Spanned;
                 Err([ #(#exprs,)* ])
             }
         };
@@ -849,9 +1096,19 @@ impl ToTokens for Mamamia {
     }
 }
 
+macro_rules! show {
+    ($name:expr, $expr:expr) => {{
+        let (name, x) = ($name, $expr);
+        println!("----------");
+        println!("{name}");
+        println!("{x}");
+        x
+    }};
+}
+
 #[proc_macro]
 pub fn mamamia(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as Mamamia);
 
-    proc_macro::TokenStream::from(input.into_token_stream())
+    proc_macro::TokenStream::from(show!("Output:", input.into_token_stream()))
 }

@@ -8,8 +8,8 @@ fn parse_int(
 ) -> parser2::Result<(&lexer2::IntLiteral, lexer2::TokensRef)> {
     let name = mamamia!(tokens {
         $(#name:int) => name,
-        else [err] => return Err(err)
-    });
+    })
+    .map_err(|[err]| err)?;
     Ok((name, tokens))
 }
 
@@ -18,9 +18,8 @@ fn parse_add(
 ) -> parser2::Result<((u64, lexer2::Span), lexer2::TokensRef)> {
     let (a, b, span) = mamamia!(tokens {
         $($(#a:(parse_int) + #b:(parse_int))@span;) => (a, b, span),
-        else [err] => return Err(err)
-        // else _ => return Err(parser2::Error::Expected { text: "a thing".into(), span: tokens.span().beginning() })
-    });
+    })
+    .map_err(|[err]| err)?;
 
     println!("({a:?}) + ({b:?}): {}", span.show());
 
