@@ -1,5 +1,5 @@
 use crate::lexer2::{Delim, Ident, Literal, Span, Spanned, Token, TokensRef};
-use kash2_derive::mamamia;
+use kash2_derive::{mamamia, one_mamamia};
 use std::{borrow::Cow, error::Error as StdError, fmt};
 
 #[derive(Debug)]
@@ -39,33 +39,35 @@ pub enum UniOp {
 
 impl UniOp {
     pub fn parse_prefix(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
-        let val = mamamia!(tokens {
-            $(-) => Self::Neg,
-            $(+) => Self::Pos,
-            $(*) => Self::Deref,
-            $(&) => Self::Ref,
-        })
-        .map_err(|_| Error::Expected {
-            text: "A prefix operator".into(),
-            span: tokens.span().beginning(),
-        })?;
-
-        Ok((val, tokens))
+        Ok((
+            mamamia!(tokens {
+                $(-) => Self::Neg,
+                $(+) => Self::Pos,
+                $(*) => Self::Deref,
+                $(&) => Self::Ref,
+                else _ => return Err(Error::Expected {
+                    text: "a prefix operator".into(),
+                    span: tokens.span().beginning(),
+                })
+            }),
+            tokens,
+        ))
     }
 
     pub fn parse_suffix(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
-        let val = mamamia!(tokens {
-            $(.-) => Self::Neg,
-            $(.+) => Self::Pos,
-            $(.*) => Self::Deref,
-            $(.&) => Self::Ref,
-        })
-        .map_err(|_| Error::Expected {
-            text: "A suffix operator".into(),
-            span: tokens.span().beginning(),
-        })?;
-
-        Ok((val, tokens))
+        Ok((
+            mamamia!(tokens {
+                $(.-) => Self::Neg,
+                $(.+) => Self::Pos,
+                $(.*) => Self::Deref,
+                $(.&) => Self::Ref,
+                else _ => return Err(Error::Expected {
+                    text: "a suffix operator".into(),
+                    span: tokens.span().beginning(),
+                })
+            }),
+            tokens,
+        ))
     }
 }
 
@@ -94,34 +96,35 @@ pub enum DuoOp {
 
 impl DuoOp {
     fn parse(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
-        let val = mamamia!(tokens {
-            $(*) => Self::Mul,
-            $(/) => Self::Div,
-            $(%) => Self::Mod,
-            $(+) => Self::Add,
-            $(-) => Self::Sub,
-            $(>>) => Self::Shr,
-            $(<<) => Self::Shl,
-            $(>>>) => Self::Rotr,
-            $(<<<) => Self::Rotl,
-            $(^) => Self::Xor,
-            $(&) => Self::BitAnd,
-            $(|) => Self::BitOr,
-            $(==) => Self::Eq,
-            $(!=) => Self::Neq,
-            $(<) => Self::Lt,
-            $(>) => Self::Gt,
-            $(<=) => Self::Le,
-            $(>=) => Self::Ge,
-            $(&&) => Self::And,
-            $(||) => Self::Or,
-        })
-        .map_err(|_| Error::Expected {
-            text: "a joining operator".into(),
-            span: tokens.span().beginning(),
-        })?;
-
-        Ok((val, tokens))
+        Ok((
+            mamamia!(tokens {
+                $(*) => Self::Mul,
+                $(/) => Self::Div,
+                $(%) => Self::Mod,
+                $(+) => Self::Add,
+                $(-) => Self::Sub,
+                $(>>) => Self::Shr,
+                $(<<) => Self::Shl,
+                $(>>>) => Self::Rotr,
+                $(<<<) => Self::Rotl,
+                $(^) => Self::Xor,
+                $(&) => Self::BitAnd,
+                $(|) => Self::BitOr,
+                $(==) => Self::Eq,
+                $(!=) => Self::Neq,
+                $(<) => Self::Lt,
+                $(>) => Self::Gt,
+                $(<=) => Self::Le,
+                $(>=) => Self::Ge,
+                $(&&) => Self::And,
+                $(||) => Self::Or,
+                else _ => return Err(Error::Expected {
+                    text: "a joining operator".into(),
+                    span: tokens.span().beginning(),
+                })
+            }),
+            tokens,
+        ))
     }
 }
 
@@ -137,20 +140,20 @@ impl Value {
         let value = mamamia!(tokens {
             $(#literal:literal) => Self::Literal(literal.clone()),
             $(#name:ident) => Self::Var(name.clone()),
-        })
-        .map_err(|_| {
-            tokens.first().map_or_else(
+            else _ => return Err(tokens.first().map_or_else(
                 || Error::UnexpectedEof {
                     span: tokens.span().clone(),
                 },
                 |first| Error::UnexpectedToken {
                     token: first.clone(),
                 },
-            )
-        })?;
+            ))
+        });
 
         Ok((value, tokens))
     }
+
+    // ($[#var:(Expr::parse)]*(,)?)
 
     pub fn parse(mut tokens: TokensRef) -> Result<(Self, TokensRef)> {
         // prefix uni-ops
@@ -161,16 +164,15 @@ impl Value {
         }
         let mut value;
         (value, tokens) = Self::parse_base(tokens)?;
-        while mamamia!(tokens {
-            $(#op:(UniOp::parse_suffix)) => {
-                value = Self::UniOp {
+        loop {
+            value = mamamia!(tokens {
+                $(#op:(UniOp::parse_suffix)) => Self::UniOp {
                     op,
                     value: Box::new(value),
-                };
-            },
-        })
-        .is_ok()
-        {}
+                },
+                else _ => break
+            });
+        }
         for op in prefix_ops.into_iter().rev() {
             value = Self::UniOp {
                 op,

@@ -997,6 +997,65 @@ impl ToTokens for Match {
 }
 
 #[derive(Debug)]
+struct OneMamamia {
+    mch: VectorMatch,
+    eq: Token![=],
+    tokens_ident: Ident,
+    block: syn::Block,
+}
+
+impl Parse for OneMamamia {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self {
+            mch: input.parse()?,
+            eq: input.parse()?,
+            tokens_ident: input.step(|cursor| {
+                cursor
+                    .ident()
+                    .and_then(|(ident, rest)| match ident.to_string().as_str() {
+                        "tokens" => Some((ident, rest)),
+                        _ => None,
+                    })
+                    .ok_or_else(|| cursor.error("expected a variable named tokens"))
+            })?,
+            block: input.parse()?,
+        })
+    }
+}
+
+impl ToTokens for OneMamamia {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let mch = &self.mch;
+        let pattern = mch.pattern();
+        let block = &self.block;
+        tokens.extend(quote! {
+            match (|| -> crate::parser2::Result<_> {
+                use #Lexer2::Spanned;
+                let __var;
+                (__var, tokens) = {
+                    let __var = &mut ();
+                    ::std::mem::drop(__var);
+
+                    let mut tokens = tokens.clone();
+                    (#mch, tokens)
+                };
+                Ok(__var)
+            })() {
+                Ok(#pattern) => Ok(#block),
+                Err(err) => Err(err)
+            }
+        });
+    }
+}
+
+#[proc_macro]
+pub fn one_mamamia(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as OneMamamia);
+
+    proc_macro::TokenStream::from(input.into_token_stream())
+}
+
+#[derive(Debug)]
 struct Mamamia {
     tokens_ident: Ident,
     brace: token::Brace,
@@ -1015,11 +1074,7 @@ impl Parse for Mamamia {
                         "tokens" => Some((ident, rest)),
                         _ => None,
                     })
-                    .ok_or_else(|| {
-                        cursor.error(
-                            "expected a named type (one of {:?} or a parenthesised expresion)",
-                        )
-                    })
+                    .ok_or_else(|| cursor.error("expected a variable named tokens"))
             })?,
             brace: braced!(content in input),
             exprs: {
@@ -1052,42 +1107,36 @@ impl Parse for Mamamia {
 
 impl ToTokens for Mamamia {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        // struct Mamamia {
-        //     tokens_ident: Ident,
-        //     comma: Token![,],
-        //     exprs: Vec<(VectorMatch, Token![=>], syn::Expr, Option<Token![,]>)>,
-        //     else_arm: Option<(Token![else], syn::Pat, Token![=>], syn::Expr)>,
-        // }
-        let exprs = self.exprs.iter().map(|(vmatch, arrow, expr, comma)| {
-            let pattern = vmatch.pattern();
+        let exprs = self.exprs.iter().map(|(mch, _, expr, _)| {
+            let pattern = mch.pattern();
             quote! {
                 match (|| -> crate::parser2::Result<_> {
+                    use #Lexer2::Spanned;
                     let __var;
                     (__var, tokens) = {
                         let __var = &mut ();
                         ::std::mem::drop(__var);
 
                         let mut tokens = tokens.clone();
-                        (#vmatch, tokens)
+                        (#mch, tokens)
                     };
                     Ok(__var)
                 })() {
-                    Ok(#pattern) #arrow break '__mamamia_block Ok(#expr) #comma
+                    Ok(#pattern) => break '__mamamia_block Ok(#expr),
                     Err(err) => err
                 }
             }
         });
         let result = quote! {
-            '__mamamia_block: {
-                use #Lexer2::Spanned;
+            ('__mamamia_block: {
                 Err([ #(#exprs,)* ])
-            }
+            })
         };
-        if let Some((_else_token, pat, arrow, expr)) = &self.else_arm {
+        if let Some((_, pat, _, expr)) = &self.else_arm {
             tokens.extend(quote! {
                 match #result {
                     Ok(x) => x,
-                    Err(#pat) #arrow #expr,
+                    Err(#pat) => #expr,
                 }
             });
         } else {
@@ -1096,9 +1145,9 @@ impl ToTokens for Mamamia {
     }
 }
 
-macro_rules! show {
-    ($name:expr, $expr:expr) => {{
-        let (name, x) = ($name, $expr);
+macro_rules! _show {
+    ($expr:expr) => {{
+        let (name, x) = ("", $expr);
         println!("----------");
         println!("{name}");
         println!("{x}");
@@ -1110,5 +1159,5 @@ macro_rules! show {
 pub fn mamamia(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as Mamamia);
 
-    proc_macro::TokenStream::from(show!("Output:", input.into_token_stream()))
+    proc_macro::TokenStream::from(input.into_token_stream())
 }
