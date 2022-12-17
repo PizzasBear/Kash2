@@ -4,9 +4,6 @@ version = "0.1.0"
 authors = ["max <mx.sht06@gmail.com>"]
 edition = "2021"
 
-[lib]
-crate-type = ["rlib"]
-
 [dependencies]
 crossterm = "0.25"
 clap = "4.0"

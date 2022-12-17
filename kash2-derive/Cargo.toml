@@ -14,5 +14,4 @@ lazy_static = "1.4"
 # nom = "7.1"
 
 [dev-dependencies]
-kash2 = { path = "../kash2/" }
 anyhow = "1.0"
