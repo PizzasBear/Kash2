@@ -717,7 +717,7 @@ impl ToTokens for NamedMatch {
                     (__val, tokens) = {
                         let __val = &mut ();
                         ::std::mem::drop(__val);
-                        #expr(tokens)?
+                        #Parser2::Parser::parse(&#expr, tokens)?
                     };
 
                     __val

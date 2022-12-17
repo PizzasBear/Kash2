@@ -1,4 +1,4 @@
-use crate::lexer2::{Delim, Ident, Literal, Span, Spanned, Token, TokensRef};
+use crate::lexer2::{Delim, Ident, Literal, Punct, PunctToken, Span, Spanned, Token, TokensRef};
 use kash2_derive::{mamamia, one_mamamia};
 use std::{borrow::Cow, error::Error as StdError, fmt};
 
@@ -28,6 +28,70 @@ impl fmt::Display for Error {
 impl StdError for Error {}
 
 pub type Result<T, Err = Error> = std::result::Result<T, Err>;
+
+pub trait Parser {
+    type Type;
+
+    fn parse<'a>(&self, tokens: TokensRef<'a>) -> Result<(Self::Type, TokensRef<'a>)>;
+}
+
+impl<T, F: Fn(TokensRef) -> Result<(T, TokensRef)>> Parser for F {
+    type Type = T;
+
+    fn parse<'a>(&self, tokens: TokensRef<'a>) -> Result<(T, TokensRef<'a>)> {
+        self(tokens)
+    }
+}
+
+fn punctuated<P: Parser>(
+    parser: &P,
+    sep: u8,
+    nonempty: bool,
+    allow_trailing: bool,
+) -> impl '_ + Fn(TokensRef) -> Result<(Vec<P::Type>, TokensRef)> {
+    move |mut tokens| {
+        let mut values = vec![mamamia!(tokens {
+            $(#value:(*parser)) => value,
+            else [err] => return if nonempty {
+                Err(err)
+            } else {
+                Ok((vec![], tokens))
+            }
+        })];
+
+        loop {
+            let Some((first, rest)) = tokens.take_split_first() else { break; };
+            let Token::Punct(PunctToken { punct, .. }) = first  else { break; };
+            if punct.ch != sep {
+                break;
+            }
+            if let Ok((value, rest)) = parser.parse(rest.clone()) {
+                values.push(value);
+                tokens = rest;
+            } else {
+                if allow_trailing {
+                    tokens = rest;
+                }
+                break;
+            }
+        }
+        Ok((values, tokens))
+    }
+}
+
+fn expect_end<P: Parser>(parser: &P) -> impl '_ + Fn(TokensRef) -> Result<(P::Type, TokensRef)> {
+    move |mut tokens| {
+        let value;
+        (value, tokens) = parser.parse(tokens)?;
+        if let Some(first) = tokens.first() {
+            Err(Error::UnexpectedToken {
+                token: first.clone(),
+            })
+        } else {
+            Ok((value, tokens))
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum UniOp {
@@ -103,8 +167,8 @@ impl DuoOp {
                 $(%) => Self::Mod,
                 $(+) => Self::Add,
                 $(-) => Self::Sub,
-                $(>>) => Self::Shr,
                 $(<<) => Self::Shl,
+                $(>>) => Self::Shr,
                 $(>>>) => Self::Rotr,
                 $(<<<) => Self::Rotl,
                 $(^) => Self::Xor,
@@ -112,9 +176,9 @@ impl DuoOp {
                 $(|) => Self::BitOr,
                 $(==) => Self::Eq,
                 $(!=) => Self::Neq,
-                $(<) => Self::Lt,
                 $(>) => Self::Gt,
                 $(<=) => Self::Le,
+                $(<) => Self::Lt,
                 $(>=) => Self::Ge,
                 $(&&) => Self::And,
                 $(||) => Self::Or,

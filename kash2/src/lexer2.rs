@@ -17,9 +17,9 @@ use nom::{
 use nom_locate::LocatedSpan;
 // use std::ops::{RangeFrom, RangeTo};
 
-pub const SPECIAL_CHARS: &'static [u8] = br#"#()[]{}\"#;
-pub const PUNCT_CHARS: &'static [u8] = br#"+-*/%,!&|^~@$<>=.,:;?'"`"#;
-pub const NEWLINE_CHARS: &'static [u8] = b"\n\r\x08";
+pub const SPECIAL_CHARS: &[u8] = br#"#()[]{}\"#;
+pub const PUNCT_CHARS: &[u8] = br#"+-*/%,!&|^~@$<>=.,:;?'"`"#;
+pub const NEWLINE_CHARS: &[u8] = b"\n\r\x08";
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Pos {
