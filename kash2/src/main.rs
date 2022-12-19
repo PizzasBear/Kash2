@@ -4,6 +4,8 @@ use std::{fs, path::Path};
 // use std::io::{self, Write};
 // use std::mem;
 
+pub mod lexer;
+
 // artemis fowl vs johan liebert
 
 fn main() -> anyhow::Result<()> {

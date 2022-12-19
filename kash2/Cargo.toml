@@ -13,3 +13,4 @@ regex = "1.7"
 nom_locate = "4.0"
 itoa = "1.0"
 kash2-derive = { path = "../kash2-derive/" }
+lazy_static = "1.4"
